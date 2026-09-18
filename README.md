@@ -6,6 +6,10 @@ SeniorHealthNode explores how MeshCore's decentralized radio mesh can help older
 
 This repository is based on **MeshCore 1.17.0**. It retains the normal MeshCore radio, identity, telemetry, and contact-based messaging foundations. The current motion-monitoring firmware is a **sensor node** that works with a separate MeshCore companion; it is not itself a modified BLE companion app or a one-device replacement for a caregiver's companion.
 
+The GY-521/MPU6050 motion sensor measures acceleration and rotation so the sensor node can flag a sudden movement that might accompany a fall, collision, or other accident. When the example rule crosses its configured threshold, the firmware queues a high-priority alert to permitted MeshCore contacts, giving caregivers a chance to check on the person even when a phone is out of reach. This is an indication of significant motion, not a determination that a fall or crash occurred; ordinary activity can trigger it, and an accident can go undetected.
+
+Future firmware could use the existing motion readings and telemetry to recognize patterns such as a strong impact followed by prolonged stillness, distinguish routine movement from likely falls or crashes, and allow sensitivity to be tailored to the wearer or mounting location. It could also add inactivity alerts, a manual help button, or richer event histories for caregivers. These features are possibilities for further development and validation; they have not been programmed into the current sensor firmware.
+
 ## Supported builds in this folder
 
 `SeniorHealthNode-MC` contains two firmware targets for the Heltec V4 OLED board:
