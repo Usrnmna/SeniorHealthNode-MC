@@ -18,19 +18,22 @@ public:
 #if ENV_INCLUDE_MPU6050
     const uint32_t now = millis();
     const bool fresh = sensors.motion.poll(now);
-    if (!sensors.motion.valid) {
+    // Discard partial evidence while an earlier alert is still being delivered.
+    if (!sensors.motion.valid || isAlertPending(motion_alert)) {
       motion_rule.update(now, 0, 0, false);
       return;
     }
-    if (!fresh || isAlertPending(motion_alert)) return;
+    if (!fresh) return;
     const auto& v = sensors.motion.values;
     if (motion_rule.update(now, v.acceleration(), v.rotation(), true)) {
       char text[120];
-      snprintf(text, sizeof(text), "Motion alert: accel=%.2fg rotation=%.1fdeg/s temp=%.1fC",
-               v.acceleration(), v.rotation(), v.temperature);
+      // Report the detected sequence's peaks, not the later quiet sample.
+      snprintf(text, sizeof(text), "Possible fall: peak accel=%.2fg rotation=%.1fdeg/s",
+               motion_rule.peakAcceleration(), motion_rule.peakRotation());
       alertIf(false, motion_alert, HIGH_PRI_ALERT, "");
       alertIf(true, motion_alert, HIGH_PRI_ALERT, text);
-      Serial.println(text);
+      Serial.printf("%s (%s)\n", text,
+                    isAlertPending(motion_alert) ? "queued" : "alert queue full");
     }
 #endif
   }
