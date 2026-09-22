@@ -18,7 +18,7 @@ This configuration targets the OLED board, not the TFT firmware environment.
 
 ## Build and run
 
-With PlatformIO installed, from the repository root:
+With PlatformIO installed, from the `SeniorHealthNode-MC` folder:
 
 ```powershell
 pio run -e heltec_v4_sensor
@@ -49,8 +49,9 @@ not sent to the Public channel. Without a registered recipient, there is nobody
 to deliver the alert to; events are not stored for later subscribers.
 
 Alerts are encrypted MeshCore direct messages using the existing path/flood,
-acknowledgment and retry machinery. A serial `Motion alert` line means the event
-was queued, not that a recipient received it.
+acknowledgment and retry machinery. A serial `Possible fall: ... (queued)` line
+means an alert task was queued, not that a recipient received it. A suffix of
+`alert queue full` means the event was not queued; the motion rule does not retry it.
 
 ## Polling and rule customization
 
@@ -61,21 +62,59 @@ or partial reads invalidate the sample and cause a five-second reconnect retry.
 The loop is cooperative; other firmware work can delay polls, so brief events
 can be missed. INT and FIFO are not used.
 
-`examples/simple_sensor/main.cpp`, `MyMesh::pollMotion()`, passes the sample's
-acceleration and rotation magnitudes into `MotionRule::update()`. Change that
-function or the rule to use `ax`, `ay`, `az`, `gx`, `gy`, `gz`, or `temperature`
-for your desired condition. The default rule triggers on either:
+### Review and tune the algorithm
 
-- acceleration magnitude >= 2.5 g (includes gravity), or
-- rotation magnitude >= 250 degrees/second.
+Start with [`MotionRule.h`](../examples/simple_sensor/MotionRule.h). Its
+`FallDetectionConfig` contains **all** decision settings; edit defaults there and
+rebuild. The former `MOTION_ACCEL_THRESHOLD_G`, `MOTION_GYRO_THRESHOLD_DPS`, and
+`MOTION_COOLDOWN_MS` build flags are replaced by this configuration. Custom code
+can also pass a `FallDetectionConfig` to the `MotionRule` constructor.
 
-Override `MOTION_ACCEL_THRESHOLD_G`, `MOTION_GYRO_THRESHOLD_DPS`, and
-`MOTION_COOLDOWN_MS` in the environment's build flags, or edit `MotionRule.h`.
-Defaults require 60 seconds since the previous event plus two continuous seconds
-at 0.7–1.3 g and below 30 degrees/second before rearming. Pending alert deliveries
-are allowed to finish before evaluating another event. Invalid readings interrupt
-the quiet period. These are demonstration motion thresholds, not a validated fall
-detection algorithm.
+[`main.cpp`](../examples/simple_sensor/main.cpp), `MyMesh::pollMotion()`, supplies
+fresh acceleration and rotation vector magnitudes. Neither magnitude depends on
+which sensor axis points upward, but placement and attachment still matter.
+**Firm torso/chest attachment** is the intended starting point. This does not make
+the rule placement-independent; a loose pocket, wrist, or nearby table requires
+separate evaluation. A dropped device can resemble a fall.
+
+| Code label | Algorithm and purpose | Settings and defaults |
+| --- | --- | --- |
+| STAGE 0 | Discard invalid, negative, nonfinite, or interrupted evidence; ignore duplicate timestamps | `max_sample_gap_ms = 100` |
+| STAGE 1 | Continuous quiet before arming at startup, recovery, expired candidates, or after an alert | `rearm_quiet_ms = 2000` |
+| STAGE 2 | Low acceleration opens one fixed event window | `low_g = 0.35`, `event_window_ms = 500` |
+| STAGE 3 | Require both impact and rotation; peaks may be on separate samples, in either order | `impact_g = 2.4`, `rotation_dps = 240` |
+| STAGE 4 | Confirm sustained quiet after the sequence; movement restarts only the quiet timer | `confirm_quiet_ms = 1000`, `confirm_timeout_ms = 5000` |
+| STAGE 5 | Emit once, then require cooldown and quiet, which can overlap | `cooldown_ms = 60000` |
+
+Quiet means acceleration between `quiet_min_g = 0.7` and `quiet_max_g = 1.3`
+(inclusive), and rotation below `quiet_max_dps = 30`. Acceleration includes gravity.
+Timers use elapsed milliseconds; both event and confirmation deadlines are inclusive.
+Only fresh samples count. A gap beyond 100 ms requires fresh settling; a shorter
+unobserved interval is tolerated, not proof of continuous physical stillness.
+
+**Research mapping:** stages 2-3 adapt the bounded sequence in Huynh et al. (2015),
+[README study 4](../README.md#study-4), [original paper](https://doi.org/10.1155/2015/452078).
+Stage 4 and all startup/cooldown/data guards are **project-specific extensions**.
+The temporal/posture work in README study 2 provides context, but this code does
+not reproduce its chest-and-thigh posture classifier. Voting (study 1), LSTM
+(study 3), and smartphone posture/orientation rules (study 5) are not implemented.
+
+**Tuning effects:** raising `low_g`, lowering either peak threshold, or lengthening
+`event_window_ms` can admit more candidates, including false alerts. Increasing
+quiet confirmation can reject continuing activity but increases delay and can
+miss falls where the person keeps moving. Set `confirm_quiet_ms = 0` to compare
+the sequence without quiet confirmation. Keep `confirm_timeout_ms` longer than
+`confirm_quiet_ms` with room for settling. Use finite, nonnegative thresholds,
+`quiet_min_g < quiet_max_g`, `low_g < quiet_min_g`, and `impact_g > quiet_max_g`;
+keep timing values below 2^31 ms. Configuration is trusted source code, not a
+runtime settings interface.
+
+A soft/sliding fall without low acceleration, strong impact, or rapid rotation
+will be rejected by this rule. It does not determine lying posture or injury.
+Alert text preserves the event-window peaks rather than the later quiet readings.
+Pending alert deliveries discard partial evidence and require settling afterward;
+new falls during that interval or the cooldown are not reported. Read failures
+also discard evidence but preserve an existing cooldown.
 
 Latest valid samples also appear in environment telemetry on channel 2, before
 other detected environmental sensors. Cayenne gyro encoding clips individual axes
@@ -92,6 +131,13 @@ g++ -std=c++11 -DMOTION_RULE_STANDALONE test/test_motion_rule/test_motion_rule.c
 .\.pio\motion-rule-tests.exe
 ```
 
-After flashing, verify readings at rest and during controlled motion, confirm a
+The tests replay synthetic 50 Hz sequences, timing boundaries, missing features,
+invalid readings, gaps, cooldown/recovery, and timer rollover. Passing them proves
+software behavior only; no measured sensitivity or false-alert rate is available.
+For real evaluation, use labeled recordings with held-out wearers and daily
+activities, reporting missed falls, false alerts per wear-day, and detection delay.
+Do not ask an older adult to perform falls for testing.
+
+After flashing, verify readings at rest and during controlled bench motion, confirm a
 recipient receives the alert, check cooldown/rearming, and disconnect/reconnect
 the sensor to verify recovery. Hardware and over-radio delivery need a live check.
