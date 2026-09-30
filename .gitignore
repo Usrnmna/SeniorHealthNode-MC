@@ -1,3 +1,9 @@
+# Ignore generated output and local tooling only.
+# Source, configuration, tests, and project documentation remain eligible for Git.
+# Keep schematic documents (Markdown, PDF, SVG, PNG, and TeX) eligible as well;
+# save maintained documents under docs/, outside ignored output directories.
+# New documents and code changes are included with git add, not ignore entries.
+
 # PlatformIO: .pio/core cache, .pio/p packages, .pio/tools compilers,
 # .pio/build firmware/native tests, and verification logs.
 .pio/
