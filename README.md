@@ -50,12 +50,16 @@ pass it to `verify.ps1 -CompilerBin 'C:\path\to\mingw64\bin'`, or extract it int
 ```
 
 The script anchors every command to its own folder, builds both firmware targets
-and their merged flash images, runs all seven native test suites, and stops on
+and their merged flash images, runs all nine native test suites, and stops on
 failure. It can also be invoked by absolute path from another directory. The
 individual commands are `pio run -e heltec_v4_sensor -t mergebin`,
 `pio run -e heltec_v4_companion_radio_ble -t mergebin`, and `pio test -e native`;
 with the local environment, replace `pio` with
 `.\.venv\Scripts\python.exe -m platformio`. These commands do not flash hardware.
+
+The native suite contains 167 cases, including 86 additional deterministic fault
+cases. See [virtual fault testing](docs/virtual-fault-testing.md) for scenario
+examples, focused commands, and the limits of simulated hardware testing.
 
 The external FEM receive gain (`radio.fem.rxgain`) defaults to **off** in the sensor firmware; the BLE companion also starts with the board driver's FEM LNA disabled. This setting is separate from the SX126x radio-chip receive boost (`radio.rxgain`). Saved sensor preferences override defaults. For an existing sensor saved with FEM gain on, run `set radio.fem.rxgain off`, then verify with `get radio.fem.rxgain`.
 
