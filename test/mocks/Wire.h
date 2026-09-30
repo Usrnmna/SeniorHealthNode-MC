@@ -12,6 +12,8 @@ public:
   size_t cursor = 0;
   unsigned requests = 0;
   uint8_t reg = 0, status = 0;
+  int read_status = 0; // HAL read error, independent of write/configuration status.
+  uint32_t last_timeout_ms = 0; // Requested timeout, not simulated elapsed time.
   void beginTransmission(uint8_t) { tx.clear(); }
   size_t write(uint8_t value) { tx.push_back(value); return 1; }
   size_t write(const uint8_t* data, size_t size) {

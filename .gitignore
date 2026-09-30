@@ -27,6 +27,10 @@ __pycache__/
 /verification.log
 /verification-paths.log
 /fall-timing-verify.log
+# Baseline, focused fault tests, and expanded verification runs.
+/baseline-verification.log
+/fault-tests.log
+/expanded-verification.log
 
 # Editor and language-server state.
 .vscode/.browse.c_cpp.db*
