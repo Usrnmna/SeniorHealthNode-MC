@@ -8,6 +8,7 @@ Packet::Packet() {
   header = 0;
   path_len = 0;
   payload_len = 0;
+  tx_tag = tx_deadline = 0;
 }
 
 bool Packet::isValidPathLen(uint8_t path_len) {

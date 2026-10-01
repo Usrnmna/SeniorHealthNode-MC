@@ -2,8 +2,12 @@
 
 These tests run locally without uploading firmware. They exercise production
 MPU6050, motion, alarm, battery, button, ADC, display-transfer, and message-encoding
-classes with deterministic inputs. The small harness follows the glue in
+classes with deterministic inputs. The original fault harness follows the glue in
 examples/simple_sensor/main.cpp; it does not compile or execute MyMesh itself.
+Additional delivery tests now exercise the production public packet builder,
+Mesh/Dispatcher, encryption, packet pool, and delivery controller with fake radio
+and clock boundaries. See [message-delivery changes](message_delivery_changes.md)
+for the directive-to-code map, public-channel contract, and adjustable limits.
 
 ## Commands
 
@@ -56,7 +60,31 @@ python -m platformio test -e native -f test_real_world_faults
 
 Parameterized values count as individual GoogleTest cases: 19 standalone scenarios
 plus 67 parameterized cases = **86 added cases**, across 26 scenario definitions.
-The original 81 cases remain included: **167 total native cases**.
+The original 81 cases remain included: **167 cases before the delivery and
+motion-health additions described below**.
+
+## Delivery and motion-health regression additions
+
+```powershell
+python -m platformio test -e native -f test_dispatcher_delivery
+python -m platformio test -e native_delivery
+python -m platformio test -e native -f test_motion_health
+```
+
+These suites cover local TX-start failure and timeout recovery, bounded packet
+allocation retries, queue expiry under CAD or airtime restrictions, independent
+public fall/assistance streams, packet callback ownership, repeat matching,
+motion progressing during radio failure, and stale-sample health reporting.
+They use the production transport path. State-only retry scenarios in the older
+fault harness now inject allocation results into `AssistanceDelivery`;
+`FallResponse` retains the button/alarm/request latch without a second retry budget. Retries use fresh timestamps, so repeated public text
+can be displayed more than once; recipient-level exactly-once delivery is not
+asserted. A matching repeater echo does not prove human or caregiver reception.
+
+Full verification in the primary workspace on **2026-09-30** passed both firmware
+builds and merged images, **190/190 native cases**, and **22/22 production transport
+cases**: **212/212 total**. The local log is `.pio/message-delivery-verification.log`.
+The dated results below describe the earlier baseline only.
 
 ## Verified local results — 2026-09-29
 
@@ -91,9 +119,11 @@ recorded human activity dataset.
   establish that the real driver meets that deadline.
 - Actual main-loop integration, GPIO/PWM waveforms, switch mechanics, ADC accuracy,
   stack/heap headroom, watchdog behavior, power interruption, and brownout recovery.
-- Actual radio packet allocation, queueing, RF transmission, reception, and GPS.
-  Retry tests inject the allocation outcome into FallResponse; they do not execute
-  FallAckSender or the MeshCore network. Queued is not confirmed delivery.
+- Real RF transmission/reception, target resource pressure, and GPS. The original
+  fault harness injects allocation results into `AssistanceDelivery`; the added delivery
+  suites exercise `FallAckSender`, Mesh, and Dispatcher with a fake radio. Neither
+  establishes physical delivery. Queueing, local TX completion, and repeater echo
+  evidence are separate states; none proves a particular person received a message.
 - ROM download recovery, flash/partition correctness, and physical wiring safety.
 - Fall-detection sensitivity/specificity on representative recorded and bench data.
   Passing these tests is not a guarantee against bricking or a medical validation.

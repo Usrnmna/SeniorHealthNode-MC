@@ -117,10 +117,9 @@ state machine is nonblocking. Delayed main-loop servicing can lengthen tones or
 gaps; it never intentionally shortens the five-second silence.
 
 The alarm remains latched until a valid acknowledgement or restart, even if the
-sensor disconnects, no recipients are registered, or the direct-alert queue is
-full. Other beeps cannot interrupt it. The existing high-priority contact alert
-is still queued independently. Acknowledging does not recall a packet already
-sent or cancel that contact-alert delivery task.
+sensor disconnects or the radio fails. Other beeps cannot interrupt it. The initial
+possible-fall alert and the later assistance request are independent public-channel
+events. Acknowledging does not recall the initial alert or cancel its retries.
 
 To acknowledge, press and release **PRG three separate times**:
 
@@ -135,10 +134,9 @@ To acknowledge, press and release **PRG three separate times**:
   detected must first be released, then clicked three times. Ordinary display
   wake behavior remains available. Very fast clicks missed by polling cannot count.
 
-The accepted third release silences SOS immediately and schedules **one channel
-message per acknowledged fall**. The configured UTF-8 text is
-`Fall Detected & User Has Requested Assistance`. Before each acknowledgement
-send attempt (including local allocation retries), the sender queries the local
+The accepted third release silences SOS immediately and creates **one assistance event per
+acknowledged fall**, with bounded public-channel retries. The configured UTF-8 text is
+`Fall Detected & User Has Requested Assistance`. When the assistance event is created, the sender queries the local
 MeshCore `LocationProvider`, processes available GPS input, and checks that GPS
 is enabled and the provider reports a valid fix. Latitude must be finite and
 within -90..90 degrees; longitude must be finite and within -180..180 degrees.
@@ -162,19 +160,19 @@ its last fix in memory; a disconnected receiver that has not reported an invalid
 fix can still expose an older location. This change does not add a fix-age limit.
 Configured advertisement coordinates are not used as a substitute for GPS.
 
-The location is appended to a fresh outgoing buffer, leaving `ack_message`
-unchanged and preventing duplicate suffixes on retries. This applies to the fall
-acknowledgement channel message; initial contact alerts and protocol traffic keep
-their existing formats. The button input reports a request for assistance, not a
+The location is appended once, leaving `ack_message` unchanged. The event text
+and selected location are frozen for retries, preventing repeated suffixes. This
+applies to the assistance message; the initial public alert retains its peak-value
+text format. The button input reports a request for assistance, not a
 medical assessment of the wearer.
 
 In `HealthNodeConfig.h`, edit `ack_message`, `ack_channel_name`, and
 `ack_channel_key`. The default destination is the public hashtag channel **#falldetect**. Its key
 is the first 16 bytes of SHA256 of the exact name, including `#`:
 `e92ddcbf922343dff181fb4948371236`. Add `#falldetect` as a public hashtag channel
-on the receiving companion. For a private channel,
-copy the recipient channel's exact 16 or 32 decoded key bytes; renaming the label
-alone does not change the destination. Companion channel slot numbers are local
+on each receiving companion. Both fall-message streams use this public channel.
+To select another public channel, set its exact decoded key bytes and label;
+renaming the label alone does not change the destination. Companion channel slot numbers are local
 to each companion and are not radio destinations. The configured key is hashed
 and used with the existing MeshCore group encryption and plain-text payload format.
 
@@ -184,11 +182,16 @@ text is limited to **160 UTF-8 bytes including `node name: ` and the location su
 rejected and logged, never truncated through a Unicode character. Save edited
 headers as UTF-8. Receiver fonts determine which characters render.
 
-If no packet buffer is available, local allocation is retried every
-`ack_retry_ms = 5000`, up to `ack_max_attempts = 60`. Success means queued for
-transmission; group messages have no end-to-end delivery acknowledgement or RF
-retry in this function. Exhaustion or oversize text is logged over serial; the
-buzzer stays silenced. Idle triple clicks never send this message.
+Allocation failures, transmit-start failures, and TX timeouts retain the event
+and retry after `ack_retry_ms = 5000`, bounded by `ack_max_attempts = 60` total
+attempts. Queued packets expire after 30 seconds. After local TX, the controller
+waits 15 seconds for a matching forwarded repeat and allows at most four locally
+successful sends without one. A repeat proves a rebroadcast was heard, not that a
+particular recipient received it. Each retry uses a fresh timestamp to pass
+repeater deduplication; receiving companions may display duplicate text.
+Exhaustion, missing repeats, and oversize text remain visible through serial and
+`health`; SOS stays silenced. Idle triple clicks never send this message.
+See [message-delivery directives and adjustment points](message_delivery_changes.md).
 
 [`FallResponse.h`](../examples/simple_sensor/FallResponse.h) owns the latch and
 button gate; [`TripleClick.h`](../src/helpers/ui/TripleClick.h) owns gesture timing;
@@ -196,16 +199,18 @@ button gate; [`TripleClick.h`](../src/helpers/ui/TripleClick.h) owns gesture tim
 [`FallAckSender.h`](../examples/simple_sensor/FallAckSender.h) provides the channel
 send function and [`FallAckMessage.h`](../examples/simple_sensor/FallAckMessage.h)
 encodes its bounded payload. [`FallAckLocation.h`](../examples/simple_sensor/FallAckLocation.h)
-queries the GPS provider. `main.cpp` connects these to `MotionRule` and GPIO.
+queries the GPS provider. [`AssistanceDelivery.h`](../examples/simple_sensor/AssistanceDelivery.h)
+owns channel attempts, completion state and repeat evidence; `main.cpp` connects
+these to `MotionRule`, the dispatcher, and GPIO.
 
 Alarm state, partial clicks, pending channel send and motion evidence/cooldown
 exist only in ordinary RAM. **Reboot clears all of them**, leaves the buzzer off,
 and starts motion detection with fresh settling. After acknowledgement without a
 reboot, the existing cooldown and quiet-settling requirements still apply.
-Analysis continues while SOS, contact delivery, or channel allocation retries are
+Analysis continues while SOS, public delivery, or channel allocation retries are
 pending. A subsequent detection after the normal cooldown keeps an existing SOS
 and partial click gesture intact. If SOS has stopped, it starts a new local alarm.
-An outstanding direct alert is retained rather than replaced. Acknowledgments
+An outstanding initial public alert is retained rather than replaced. Acknowledgments
 coalesce into an already-pending assistance message without restarting its retry
 budget. These policies suppress duplicate notifications, not sensor analysis.
 
@@ -233,21 +238,21 @@ approximately 1 g. Chip temperature is not body temperature.
 
 ## Recipient setup
 
-Use a MeshCore companion to discover/add the sensor, then log in to the sensor
-using its admin password. Existing sensor firmware grants a newly registered
-admin both low- and high-priority alert permissions. The build's default password
-is `password`; change it with the existing `password <new-password>` CLI command.
-Use `get acl` over serial to inspect registered contacts and permission bits.
-An existing contact needs high-priority bit 128 enabled (`setperm <pubkey> <bits>`;
-preserve its other permission bits). No recipient is hard-coded and the initial
-possible-fall alerts are not sent to the Public channel. The separate post-click
-channel acknowledgement is configured above. Without a registered recipient, there is nobody
-to deliver the alert to; events are not stored for later subscribers.
+Add the configured public hashtag channel, initially `#falldetect`, to each
+receiving companion and use compatible radio settings. Both initial possible-fall
+and post-click assistance messages use it; no contact registration or high-priority
+ACL permission is required for these fall messages. Public hashtag channel keys
+are shared channel identities, not recipient-specific encryption secrets.
 
-Alerts are encrypted MeshCore direct messages using the existing path/flood,
-acknowledgment and retry machinery. A serial `Possible fall: ... (queued)` line
-means an alert task was queued, not that a recipient received it. A suffix of
-`alert queue full` means the event was not queued; the motion rule does not retry it.
+Contact login and permissions remain relevant for remote administration and other
+sensor features. Change the sensor's default admin password (`password`) with
+`password <new-password>` when configuring those features.
+
+Use serial `health` to inspect both message states. `repeater echo heard` confirms
+a matching forwarded packet reached this node; it does not establish that a
+caregiver's companion received or displayed the message. Verify both public texts
+at the intended listening companion. The [delivery guide](message_delivery_changes.md)
+explains retries, duplicate text, missing repeat evidence, and validation limits.
 
 ## Polling and rule customization
 
@@ -261,7 +266,10 @@ Successful initialization still waits 100 ms for settling; the rule independentl
 requires two seconds of quiet after invalid data. Retry timers are configurable
 in `HealthNodeConfig.h`.
 The loop is cooperative; other firmware work can delay polls, so brief events
-can be missed. INT and FIFO are not used.
+can be missed. INT and FIFO are not used. `health` reports the maximum completed
+fresh-sample interval, intervals exceeding the 100 ms detector guard, and a fault
+after five seconds without fresh valid motion. Recovery does not bypass quiet
+settling, and the gap guard is unchanged. See [the health diagnostics](message_delivery_changes.md).
 
 ### Sampling and background work
 

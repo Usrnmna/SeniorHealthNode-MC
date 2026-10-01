@@ -1,8 +1,12 @@
 #include "SensorMesh.h"
+#include <HealthNodeConfig.h>
 #if ENV_INCLUDE_MPU6050
 #include "MotionRule.h"
 #include "FallResponse.h"
 #include "FallAckSender.h"
+#include "FallAckLocation.h"
+#include "MotionHealth.h"
+#include <initializer_list>
 #include "LowBatteryAlert.h"
 #include <helpers/ui/AlarmBuzzer.h>
 
@@ -21,14 +25,52 @@ static_assert(HealthNodeConfig::charging_status_pin < 0 ||
   static UITask ui_task(display);
 #endif
 
-class MyMesh : public SensorMesh {
+class MyMesh : public SensorMesh
+#if ENV_INCLUDE_MPU6050
+  , public AssistanceTransport
+#endif
+{
 #if ENV_INCLUDE_MPU6050
   MotionRule motion_rule;
-  Trigger motion_alert;
   FallResponse fall_response;
   LowBatteryAlert battery_alert;
+  AssistanceDelivery assistance{0}, fall_delivery{1};
+  MotionHealth motion_health{FallDetectionConfig{}.max_sample_gap_ms, HealthNodeConfig::motion_fault_timeout_ms};
+  bool assistance_started = false, last_motion_fault = false;
+  AssistanceDelivery::State reported_help = AssistanceDelivery::Idle;
+  AssistanceDelivery::State reported_fall = AssistanceDelivery::Idle;
+
+  void onPacketTxComplete(uint32_t tag, bool sent) override {
+    assistance.txComplete(millis(), tag, sent);
+    fall_delivery.txComplete(millis(), tag, sent);
+  }
+  bool filterRecvFloodPacket(mesh::Packet* packet) override {
+    // Observe repeat evidence BEFORE Mesh's seen-packet table discards our echo.
+    for (auto* delivery : {&fall_delivery, &assistance}) {
+      if (FallAckSender::observeRepeat(*packet, *delivery) && delivery->queuedTag())
+        cancelQueuedPacket(delivery->queuedTag()); // No duplicate queued retry after confirmation.
+    }
+    return false; // Preserve normal Mesh validation, deduplication and forwarding.
+  }
+  void reportAssistance() {
+    // Serial only: no OLED/UI modifications or alterations to public text.
+    if (reported_fall != fall_delivery.state()) {
+      reported_fall = fall_delivery.state();
+      Serial.printf("Fall channel: %s; attempts=%u\n", fall_delivery.status(), fall_delivery.attemptCount());
+    } else if (reported_help != assistance.state()) {
+      reported_help = assistance.state();
+      Serial.printf("Assistance channel: %s; attempts=%u\n", assistance.status(), assistance.attemptCount());
+    }
+  }
 #endif
 public:
+#if ENV_INCLUDE_MPU6050
+  uint32_t uniqueTimestamp() override { return getRTCClock()->getCurrentTimeUnique(); }
+  AssistanceTransport::Result queueAssistance(const uint8_t* data, unsigned len, uint32_t tag,
+                                               uint8_t fingerprint[8]) override {
+    return FallAckSender::queueGroup(*this, data, len, tag, fingerprint);
+  }
+#endif
   void pollLowBattery() {
 #if ENV_INCLUDE_MPU6050
     using namespace HealthNodeConfig;
@@ -49,18 +91,25 @@ public:
     const uint32_t now = millis();
     if (fall_response.updateButton(now, digitalRead(PIN_USER_BTN) == LOW)) {
       alarm_buzzer.stop();
-      Serial.println("Fall acknowledged: SOS stopped; channel message pending");
+      Serial.println("Fall acknowledged: SOS stopped; assistance delivery pending");
     }
-    if (fall_response.messageDue(now)) {
-      const auto result = FallAckSender::send(*this, sensors, getNodeName());
-      fall_response.messageAttempted(now, result != FallAckSender::NoPacket);
-      if (result == FallAckSender::Queued)
-        Serial.printf("Fall acknowledgement queued to %s (delivery unconfirmed)\n", HealthNodeConfig::ack_channel_name);
-      else if (result == FallAckSender::InvalidText)
-        Serial.println("Fall acknowledgement NOT queued: sender + message + location exceeds 160 UTF-8 bytes");
-      else if (!fall_response.messagePending())
-        Serial.println("Fall acknowledgement NOT queued: packet allocation retries exhausted");
+    if (fall_response.messagePending() && !assistance_started) {
+      double latitude, longitude;
+      const bool fix = FallAckLocation::read(sensors, latitude, longitude);
+      uint8_t payload[FallAckMessage::max_payload_bytes];
+      const unsigned len = FallAckMessage::encodeWithLocation(payload, 0, getNodeName(),
+          HealthNodeConfig::ack_message, fix, latitude, longitude, HealthNodeConfig::DefaultLocation);
+      assistance.begin(now, *this, payload, len); // Freeze event text/location for consistent retries.
+      assistance_started = true;
+      reported_help = AssistanceDelivery::Idle;
     }
+    assistance.poll(now, *this);
+    fall_delivery.poll(now, *this);
+    if (assistance_started && !assistance.busy()) {
+      fall_response.messageCompleted(); // Terminal outcomes stay visible in assistance status.
+      assistance_started = false;
+    }
+    reportAssistance();
     alarm_buzzer.loop();
 #endif
   }
@@ -69,6 +118,12 @@ public:
 #if ENV_INCLUDE_MPU6050
     const uint32_t now = millis();
     const bool fresh = sensors.motion.poll(now);
+    motion_health.observe(now, sensors.motion.valid, fresh);
+    if (motion_health.fault() != last_motion_fault) {
+      last_motion_fault = motion_health.fault();
+      Serial.println(last_motion_fault ? "Motion FAULT: no fresh valid samples; detection unavailable"
+                                       : "Motion recovered: fresh samples; detector must rearm");
+    }
     // Sensor validity alone gates analysis; notification state cannot blind it.
     if (!sensors.motion.valid) {
       motion_rule.update(now, 0, 0, false);
@@ -78,21 +133,17 @@ public:
     const auto& v = sensors.motion.values;
     if (motion_rule.update(now, v.acceleration(), v.rotation(), true)) {
       // Coalesce notifications without resetting SOS/button progress or cancelling
-      // an earlier direct alert. MotionRule still enforces its normal cooldown.
+      // an earlier public alert. MotionRule still enforces its normal cooldown.
       if (fall_response.onFall(now, digitalRead(PIN_USER_BTN) == LOW))
         alarm_buzzer.startSOS();
       char text[120];
       // Report the detected sequence's peaks, not the later quiet sample.
       snprintf(text, sizeof(text), "Possible fall: peak accel=%.2fg rotation=%.1fdeg/s",
                motion_rule.peakAcceleration(), motion_rule.peakRotation());
-      const bool coalesced = isAlertPending(motion_alert);
-      if (!coalesced) {
-        alertIf(false, motion_alert, HIGH_PRI_ALERT, "");
-        alertIf(true, motion_alert, HIGH_PRI_ALERT, text);
-      }
-      Serial.printf("%s (%s)\n", text,
-                    coalesced ? "notification coalesced with pending alert" :
-                    isAlertPending(motion_alert) ? "queued" : "alert queue full");
+      uint8_t payload[FallAckMessage::max_payload_bytes];
+      const unsigned len = FallAckMessage::encode(payload, 0, getNodeName(), text);
+      const bool accepted = fall_delivery.begin(now, *this, payload, len);
+      Serial.printf("%s (%s)\n", text, accepted ? "public channel pending" : "coalesced with pending public alert");
     }
 #endif
   }
@@ -125,6 +176,12 @@ protected:
 
   bool handleCustomCommand(uint32_t sender_timestamp, char* command, char* reply) override {
 #if ENV_INCLUDE_MPU6050
+    if (strcmp(command, "health") == 0) {
+      snprintf(reply, 160, "fall=%s; help=%s; motion=%s; max_gap_ms=%lu; gaps=%lu",
+          fall_delivery.status(), assistance.status(), motion_health.fault() ? "FAULT" : "monitoring",
+          (unsigned long)motion_health.maxGapMs(), (unsigned long)motion_health.gapCount());
+      return true;
+    }
     if (strcmp(command, "beep") == 0) {
       strcpy(reply, alarm_buzzer.beep() ? "Beep started" : "Beep unavailable or alarm active");
       return true;
@@ -240,7 +297,8 @@ void loop() {
   the_mesh.pollFallResponse(); // Service button/tone before serial, radio and sensors.
   the_mesh.pollLowBattery();
   int len = strlen(command);
-  while (Serial.available() && len < sizeof(command)-1) {
+  unsigned serial_bytes = 0;
+  while (Serial.available() && len < sizeof(command)-1 && serial_bytes++ < HealthNodeConfig::serial_rx_bytes_per_loop) {
     char c = Serial.read();
     if (c != '\n') {
       command[len++] = c;
