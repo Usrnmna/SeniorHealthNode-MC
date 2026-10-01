@@ -2,6 +2,8 @@
 
 **MeshCore-based motion monitoring and mesh alerts for people who may be unable to reach a phone.**
 
+See [latest additions and modifications](#latest-additions-and-modifications--2026-09-30) for the recent delivery, diagnostics, timing, wiring, and test updates.
+
 SeniorHealthNode explores how MeshCore's decentralized radio mesh can help older adults and people with disabilities call attention to a possible need for help. A firmly worn torso/chest node can notice a possible-fall motion sequence and send an alert through a MeshCore network on a configured public channel, including in places where a phone is out of reach or conventional connectivity is unavailable. The aim is to give people and caregivers another way to stay connected while supporting greater independence.
 
 This repository is based on **MeshCore 1.17.0**. It retains the normal MeshCore radio, identity, telemetry, and contact-based messaging foundations. The current motion-monitoring firmware is a **sensor node** that works with a separate MeshCore companion; it is not itself a modified BLE companion app or a one-device replacement for a caregiver's companion.
@@ -238,7 +240,8 @@ The native suites exercise synthetic motion sequences, SOS and button timing,
 battery policy, sensor faults, sampling-health diagnostics, and production public
 message delivery with injected radio failures. The `native_delivery` environment
 uses production Mesh/crypto code without the ordinary suite's crypto mocks.
-Both firmware builds and merged images pass, along with **212/212 software tests**
+The recorded **2026-09-30** verification passed both firmware builds and merged
+images, along with **212/212 software tests**
 (190 native and 22 production transport cases). See the [delivery implementation
 report](docs/message_delivery_changes.md#validation-and-further-changes) and the
 [dated baseline results](docs/virtual-fault-testing.md). These checks concern
@@ -247,6 +250,79 @@ flashed for this change; buzzer electrical behavior, live sensor readings, radio
 coverage, and recipient delivery remain unverified. There is currently no dedicated
 panic button, inactivity detector, caregiver dashboard, or automatic call to
 emergency services in this repository.
+
+## Latest additions and modifications — 2026-09-30
+
+The latest implementation update (`d456c89`) adds public-message delivery tracking
+and motion-health diagnostics. Recent supporting changes add sampling-timing
+improvements, a virtual fault suite, and a firmware-derived pin schematic.
+
+### Public fall and assistance messages
+
+The initial possible-fall alert and the PRG triple-click assistance request now
+have independent delivery controllers on the configured channel, initially
+`#falldetect`. Each retains its event text through packet-allocation failures,
+TX-start failures, TX timeouts, and queue expiry. Motion analysis, button handling,
+and buzzer servicing continue while delivery is pending, subject to the existing
+cooperative main loop.
+
+Default limits in [`HealthNodeConfig.h`](include/HealthNodeConfig.h) are:
+
+| Control | Default behavior |
+| --- | --- |
+| Local failure retry | Wait 5 seconds before retrying; at most 60 allocation/enqueue attempts per event. |
+| Queue residence | Expire a tracked packet after 30 seconds if it has not started transmitting. |
+| Repeat evidence | Wait 15 seconds after local TX for a matching forwarded packet; allow at most four successful local sends without one. |
+| Retry text | Keep the original node name, message, and selected location; use a fresh timestamp for each attempt. |
+
+Receivers may display duplicate text. A matching repeater echo is rebroadcast
+evidence, not confirmation that a caregiver received or read the message. A direct
+listener may receive text even when no repeat is heard. Pending events are held
+in RAM and do not survive reboot. See the [delivery implementation and adjustment
+guide](docs/message_delivery_changes.md) for state transitions, late echoes,
+failure handling, and configuration details.
+
+### Serial health and sampling diagnostics
+
+At 115200 baud, enter `health` followed by carriage return to inspect:
+
+| Field | Meaning |
+| --- | --- |
+| `fall` / `help` | Separate states for the initial fall alert and the assistance request: idle, pending, queued, locally transmitted, repeater echo heard, or a terminal failure/unconfirmed result. |
+| `motion` | `FAULT` after 5 seconds without fresh valid motion data; clears when a fresh valid reading arrives. `monitoring` does not mean the detector is armed. |
+| `max_gap_ms` / `gaps` | Longest completed interval between fresh valid samples, and count of intervals exceeding the detector's 100 ms gap limit. An ongoing outage contributes an interval when sampling resumes. |
+
+These diagnostics do not relax the detector's data guards or quiet-rearm rules.
+Serial input and character echo are capped at 16 bytes per loop pass; command
+execution and other blocking work can still delay sampling. See the [CLI
+reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/simple_sensor/MotionHealth.h).
+
+### Timing, wiring, and regression coverage
+
+- **Sampling and peripheral scheduling:** bounded MPU6050 recovery, background
+  environmental collection with cache expiry, 32-byte OLED transfer pieces, and
+  staged battery ADC acquisition reduce interference with motion polling. The
+  [timing report](docs/fall_timing_changes.md) maps these changes to their source
+  files and tunables. Sampling remains cooperative; interrupt/FIFO capture is not
+  implemented.
+- **Pin reference:** the [simple pin schematic](docs/pin_schematic.md) collects
+  external MPU6050/buzzer wiring, onboard display/radio/control signals, and optional
+  GPS, RTC, and sensor connections. It uses ESP32 GPIO numbers and is derived from
+  firmware; it is not a complete PCB netlist or physically verified wiring plan.
+- **Virtual faults:** the [fault-testing guide](docs/virtual-fault-testing.md)
+  covers sensor disconnections, truncated I2C reads, loop stalls, button bounce,
+  battery/SOS priority, OLED failures, ADC scheduling, and a deterministic replay
+  of one simulated hour.
+- **Production transport tests:** `native_delivery` exercises the actual public
+  packet builder, Mesh/Dispatcher, encryption, and packet pool with a fake radio
+  and clock. Added coverage includes queue expiry, TX failures, repeat matching,
+  independent message streams, and sampling-health recovery. `verify.ps1` runs
+  both `native` and `native_delivery` after building both merged firmware images.
+
+The recorded September 30 verification reports **190 native + 22 transport = 212
+passing software tests**. This README update does not rerun those builds or tests.
+Physical timing, RF delivery, sensor placement, and detection accuracy still need
+hardware and representative-use validation, as described above.
 
 ## MeshCore resources and license
 
