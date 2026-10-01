@@ -6,26 +6,21 @@ See [latest additions and modifications](#latest-additions-and-modifications--20
 
 SeniorHealthNode explores how MeshCore's decentralized radio mesh can help older adults and people with disabilities call attention to a possible need for help. A firmly worn torso/chest node can notice a possible-fall motion sequence and send an alert through a MeshCore network on a configured public channel, including in places where a phone is out of reach or conventional connectivity is unavailable. The aim is to give people and caregivers another way to stay connected while supporting greater independence.
 
-This repository is based on **MeshCore 1.17.0**. It retains the normal MeshCore radio, identity, telemetry, and contact-based messaging foundations. The current motion-monitoring firmware is a **sensor node** that works with a separate MeshCore companion; it is not itself a modified BLE companion app or a one-device replacement for a caregiver's companion.
+This repository is based on **MeshCore 1.17.0**. It retains the normal MeshCore radio, identity, telemetry, and contact-based messaging foundations. The **single firmware image combines the MeshCore BLE companion and local fall detection on the same Heltec V4.3 OLED node**. A phone connects to this node over BLE; motion monitoring and public-channel alerts run locally even when the phone is disconnected.
 
 The GY-521/MPU6050 motion sensor runs a **possible-fall sequence detector**: low acceleration, followed by impact and rapid rotation, followed by a short quiet period. It queues a public-channel alert, initially to `#falldetect`, with bounded local retries and repeater-echo tracking. This is an experimental rule, not a determination that a fall occurred; routine activity can trigger it and falls can go undetected. The sensor must move with the wearer; a nearby, unworn node cannot measure the person's body motion.
 
-All thresholds and timers are grouped in `FallDetectionConfig` at the top of [MotionRule.h](examples/simple_sensor/MotionRule.h), with numbered `STAGE` comments showing where each algorithm is used. See the [tuning guide](docs/gy521_sensor.md#polling-and-rule-customization). Posture classification, trained models, inactivity alerts, an independent manual help button, and caregiver event histories are not implemented.
+All thresholds and timers are grouped in `FallDetectionConfig` at the top of [MotionRule.h](examples/companion_radio/health/MotionRule.h), with numbered `STAGE` comments showing where each algorithm is used. See the [tuning guide](docs/gy521_sensor.md#polling-and-rule-customization). Posture classification, trained models, inactivity alerts, an independent manual help button, and caregiver event histories are not implemented.
 
-A detected fall also latches an external passive buzzer into an SOS loop, with five seconds of silence between sequences. Three short PRG clicks within three seconds silence it and queue a configurable Unicode acknowledgement to a MeshCore channel, appending the GPS provider's valid coordinates or `DefaultLocation` (`HOME`). Reboot clears the alarm and detector state. Buzzer GPIO47, sound/button timings, channel key and message are grouped in [`HealthNodeConfig.h`](include/HealthNodeConfig.h). See the [buzzer wiring and function guide](docs/gy521_sensor.md#passive-buzzer-wiring-and-shared-functions).
+A detected fall also latches an external passive buzzer into an SOS loop, with five seconds of silence between sequences. While SOS is active, PRG is reserved for alarm acknowledgement. Three short PRG clicks within three seconds silence it and queue a configurable Unicode acknowledgement to a MeshCore channel, appending the GPS provider's valid coordinates or `DefaultLocation` (`HOME`). Reboot clears the alarm and detector state. The companion retains its low-voltage automatic shutdown below 3400 mV when external power is not detected; shutdown stops monitoring and sound. Buzzer GPIO47, sound/button timings, channel key and message are grouped in [`HealthNodeConfig.h`](include/HealthNodeConfig.h). See the [buzzer wiring and function guide](docs/gy521_sensor.md#passive-buzzer-wiring-and-shared-functions).
 
 Below 3500 mV, the sensor plays three 450 ms battery-warning tones at 2093, 1760, and 1480 Hz every ten minutes. Fall SOS takes priority. The warning clears above 3500 mV. Silencing as soon as charging starts requires an added charging-status signal; the stock board has no ESP32 connection for it, so sensing is disabled by default. See the [low-battery settings and hardware limitation](docs/gy521_sensor.md#low-battery-buzzer-reminder).
 
-## Firmware targets
+## Combined firmware
 
-`SeniorHealthNode-MC` contains two firmware targets for the Heltec V4 OLED board:
+`heltec_v4_companion_radio_ble` is the only firmware target. It includes MeshCore BLE, contacts, messaging, display, GPS and environmental telemetry, plus GY-521/MPU6050 fall detection, SOS, PRG acknowledgement and low-battery reminders.
 
-- `heltec_v4_companion_radio_ble`: MeshCore BLE companion, including its existing display, contacts, messaging, GPS, and environmental telemetry support.
-- `heltec_v4_sensor`: the modified GY-521/MPU6050 motion-monitoring node, including telemetry, public fall alerts, other contact alerts, serial commands, and its existing update support.
-
-Build from this folder with `pio run -e heltec_v4_companion_radio_ble` or `pio run -e heltec_v4_sensor`. A plain `pio run` builds the BLE companion. The `native` environment retains the shared software tests, including the motion-rule tests.
-
-The configured firmware targets are Heltec V4 OLED builds. The sensor and BLE companion are separate firmware images; motion detection, SOS acknowledgement, and battery reminders run in the sensor target.
+Build it with `pio run` or `pio run -e heltec_v4_companion_radio_ble`. The `native` and `native_delivery` environments are host-side software tests, not firmware images. One upload installs the companion and health-monitoring features together.
 
 ### Build and test on Windows
 
@@ -51,11 +46,10 @@ pass it to `verify.ps1 -CompilerBin 'C:\path\to\mingw64\bin'`, or extract it int
 .\verify.ps1
 ```
 
-The script anchors every command to its own folder, builds both firmware targets
-and their merged flash images, runs all native test suites, and stops on
+The script anchors every command to its own folder, builds the combined firmware
+and its merged flash image, runs all native test suites, and stops on
 failure. It can also be invoked by absolute path from another directory. The
-individual commands are `pio run -e heltec_v4_sensor -t mergebin`,
-`pio run -e heltec_v4_companion_radio_ble -t mergebin`, `pio test -e native`,
+individual commands are `pio run -e heltec_v4_companion_radio_ble -t mergebin`, `pio test -e native`,
 and `pio test -e native_delivery`;
 with the local environment, replace `pio` with
 `.\.venv\Scripts\python.exe -m platformio`. These commands do not flash hardware.
@@ -65,7 +59,7 @@ message-delivery fault tests. See [virtual fault testing](docs/virtual-fault-tes
 for scenario examples and [message-delivery changes](docs/message_delivery_changes.md)
 for directives, state meanings, tunables, and validation status.
 
-The external FEM receive gain (`radio.fem.rxgain`) defaults to **off** in the sensor firmware; the BLE companion also starts with the board driver's FEM LNA disabled. This setting is separate from the SX126x radio-chip receive boost (`radio.rxgain`). Saved sensor preferences override defaults. For an existing sensor saved with FEM gain on, run `set radio.fem.rxgain off`, then verify with `get radio.fem.rxgain`.
+The board driver's external FEM LNA starts disabled. This is separate from the SX126x radio-chip receive boost. Configure the companion's radio and BLE settings through a compatible MeshCore client.
 
 > [!IMPORTANT]
 > This is a prototype, not a validated fall detector, medical device, or guaranteed emergency service. An alert can be missed because of sensor placement, radio coverage, power, configuration, or an unavailable recipient. Use an established emergency plan for situations where a missed alert could cause harm.
@@ -74,9 +68,9 @@ The external FEM receive gain (`radio.fem.rxgain`) defaults to **off** in the se
 
 | Part | Role |
 | --- | --- |
-| `heltec_v4_sensor` | Heltec V4.3 OLED sensor firmware that reads a GY-521/MPU6050, publishes telemetry, and sends motion alerts. |
-| MeshCore companion | A regular BLE, USB, or Wi-Fi companion used to discover the sensor, configure access, and receive messages. The `heltec_v4_companion_radio_ble` target still builds the standard companion firmware. |
-| MeshCore network | Compatible nodes provide the radio path between the sensor and a companion listening on the configured channel, subject to normal network coverage and radio settings. |
+| `heltec_v4_companion_radio_ble` | One Heltec V4.3 OLED node runs BLE companion services, motion monitoring, telemetry and public fall alerts together. |
+| Connected phone | A compatible MeshCore client connects directly to this node over BLE for ordinary messaging and configuration. |
+| Receiving nodes and mesh | Other compatible nodes listen on the configured channel; repeaters can extend the radio path, subject to coverage and radio settings. |
 
 Both the initial possible-fall alert and the subsequent PRG triple-click assistance request are public-channel messages, initially on `#falldetect`. Listening companions need the matching channel key and radio settings; registered contacts are not required for these fall messages. Local TX completion and a heard repeater echo are tracked separately; neither identifies a recipient who received the text. Idle button clicks send no acknowledgement.
 
@@ -97,33 +91,33 @@ Both the initial possible-fall alert and the subsequent PRG triple-click assista
 > [!IMPORTANT]
 > **Connecting a charger does not immediately silence the battery warning on the current hardware.** Charging sensing defaults to disabled (`charging_status_pin = -1`). With no charging-status GPIO connection, the warning clears only when measured battery voltage exceeds 3500 mV. An added, conditioned 3.3 V active-charging signal can cancel the battery warning before voltage recovers; it never cancels SOS. See the [charging input requirements](docs/gy521_sensor.md#low-battery-buzzer-reminder).
 
-Edit [`include/HealthNodeConfig.h`](include/HealthNodeConfig.h) for buzzer, battery, button and channel settings. Edit `FallDetectionConfig` in [`MotionRule.h`](examples/simple_sensor/MotionRule.h) for motion thresholds and timing. Both require a firmware rebuild.
+Edit [`include/HealthNodeConfig.h`](include/HealthNodeConfig.h) for buzzer, battery, button and channel settings. Edit `FallDetectionConfig` in [`MotionRule.h`](examples/companion_radio/health/MotionRule.h) for motion thresholds and timing. Both require a firmware rebuild.
 
 ## Source layout
 
-Health monitoring runs in the **sensor** target. The BLE companion supplies the separate client connection for configuration and messaging.
+Health monitoring runs inside the **BLE companion**. `main.cpp` services motion, alarms, radio, BLE and the display in the same firmware loop.
 
 | File | Responsibility |
 | --- | --- |
 | [`src/helpers/sensors/MPU6050.h`](src/helpers/sensors/MPU6050.h) | Reads a GY-521/MPU6050 on `Wire1` at I2C address `0x68`. It checks the device ID, reads acceleration, rotation, and chip temperature, and retries after a failed read. |
-| [`src/helpers/sensors/EnvironmentSensorManager.cpp`](src/helpers/sensors/EnvironmentSensorManager.cpp) and [`.h`](src/helpers/sensors/EnvironmentSensorManager.h) | Make the motion sensor available to the sensor firmware and add its latest valid readings to environmental telemetry. |
-| [`examples/simple_sensor/MotionRule.h`](examples/simple_sensor/MotionRule.h) | Implements the low-acceleration / impact / rotation sequence, optional quiet confirmation, sampling-gap rejection, and cooldown. All settings are grouped at the top. |
-| [`examples/simple_sensor/main.cpp`](examples/simple_sensor/main.cpp) | Services motion detection, fall acknowledgement, buzzer playback and battery polling; handles the `motion`, `health`, and `beep` commands. |
+| [`src/helpers/sensors/EnvironmentSensorManager.cpp`](src/helpers/sensors/EnvironmentSensorManager.cpp) and [`.h`](src/helpers/sensors/EnvironmentSensorManager.h) | Make the motion sensor available to the combined firmware and add its latest valid readings to environmental telemetry. |
+| [`examples/companion_radio/health/MotionRule.h`](examples/companion_radio/health/MotionRule.h) | Implements the low-acceleration / impact / rotation sequence, optional quiet confirmation, sampling-gap rejection, and cooldown. All settings are grouped at the top. |
+| [`HealthMonitor.cpp`](examples/companion_radio/HealthMonitor.cpp) | Services motion detection, fall acknowledgement, buzzer playback and battery polling; handles the `motion`, `health`, and `beep` commands. |
 | [`include/HealthNodeConfig.h`](include/HealthNodeConfig.h), [`AlarmBuzzer.h`](src/helpers/ui/AlarmBuzzer.h), and [`BuzzerPattern.h`](src/helpers/ui/BuzzerPattern.h) | Configure and initialize the passive buzzer; expose `alarm_buzzer.beep()`, nonblocking SOS and three-tone battery playback. |
-| [`LowBatteryAlert.h`](examples/simple_sensor/LowBatteryAlert.h) | Apply the battery threshold, charging override and ten-minute reminder interval. |
-| [`FallResponse.h`](examples/simple_sensor/FallResponse.h), [`TripleClick.h`](src/helpers/ui/TripleClick.h), and [`FallAckSender.h`](examples/simple_sensor/FallAckSender.h) | Gate acknowledgement on a detected fall and three debounced short clicks, silence SOS, and queue configured UTF-8 channel text. |
-| [`AssistanceDelivery.h`](examples/simple_sensor/AssistanceDelivery.h) and [`MotionHealth.h`](examples/simple_sensor/MotionHealth.h) | Track the two public fall-message streams, bounded retries and repeater echoes; report prolonged sampling outages and completed sampling gaps. |
+| [`LowBatteryAlert.h`](examples/companion_radio/health/LowBatteryAlert.h) | Apply the battery threshold, charging override and ten-minute reminder interval. |
+| [`FallResponse.h`](examples/companion_radio/health/FallResponse.h), [`TripleClick.h`](src/helpers/ui/TripleClick.h), and [`FallAckSender.h`](examples/companion_radio/health/FallAckSender.h) | Gate acknowledgement on a detected fall and three debounced short clicks, silence SOS, and queue configured UTF-8 channel text. |
+| [`AssistanceDelivery.h`](examples/companion_radio/health/AssistanceDelivery.h) and [`MotionHealth.h`](examples/companion_radio/health/MotionHealth.h) | Track the two public fall-message streams, bounded retries and repeater echoes; report prolonged sampling outages and completed sampling gaps. |
 | [`boards/heltec_v4.json`](boards/heltec_v4.json) and [`pins_arduino.h`](boards/variants/heltec_v4/pins_arduino.h) | Select the project-local Arduino pin variant. Application board drivers remain in `variants/heltec_v4`. |
-| [`variants/heltec_v4/platformio.ini`](variants/heltec_v4/platformio.ini) | Enables the MPU6050 for `heltec_v4_sensor` and assigns its I2C pins to GPIO4 and GPIO6. The OLED/RTC bus remains separate. |
+| [`variants/heltec_v4/platformio.ini`](variants/heltec_v4/platformio.ini) | Enables the MPU6050 for `heltec_v4_companion_radio_ble` and assigns its I2C pins to GPIO4 and GPIO6. The OLED/RTC bus remains separate. |
 | [`docs/gy521_sensor.md`](docs/gy521_sensor.md) and [`test/test_motion_rule/test_motion_rule.cpp`](test/test_motion_rule/test_motion_rule.cpp) | Document wiring, configuration, and checks for the motion rule. |
 
 ## Possible-fall detection
 
-The staged detector runs locally in `heltec_v4_sensor`. A PC is needed for building, flashing and setup; motion decisions run on the Heltec.
+The staged detector runs locally in `heltec_v4_companion_radio_ble`. A PC is needed for building, flashing and setup; motion decisions run on the Heltec.
 
 ### Algorithm stages and default settings
 
-The `STAGE 0` through `STAGE 5` comments in [`MotionRule.h`](examples/simple_sensor/MotionRule.h) identify each part of the implementation. Internally, the rule moves through `Settling`, `Armed`, `Peaks`, and `Confirming` states.
+The `STAGE 0` through `STAGE 5` comments in [`MotionRule.h`](examples/companion_radio/health/MotionRule.h) identify each part of the implementation. Internally, the rule moves through `Settling`, `Armed`, `Peaks`, and `Confirming` states.
 
 | Code stage | Behavior | Configuration defaults |
 | --- | --- | --- |
@@ -141,16 +135,16 @@ Stages 2-3 adapt the timed sequence from Huynh et al. [4](#study-4). Quiet confi
 ### Runtime behavior
 
 - [`MPU6050.h`](src/helpers/sensors/MPU6050.h) configures filtered 50 Hz sampling with ranges of +/-8 g and +/-500 degrees/second. Failed/partial reads invalidate the sample and retry after 20 ms; three consecutive failures trigger reinitialization, and failed initialization uses five-second backoff. Polling is cooperative, so other firmware work can delay it; interrupt and FIFO capture are not used.
-- [`MyMesh::pollMotion()` in main.cpp](examples/simple_sensor/main.cpp) passes fresh vector magnitudes to `MotionRule::update()` independently of pending alarms or delivery. Notifications coalesce while an earlier alert is pending. The detector's 60-second cooldown and quiet-rearm requirements remain in force.
-- The sensor target collects environmental readings in a background task and serves telemetry from a bounded-age cache. OLED frames transfer in small pieces; battery readings use staged ADC acquisition and a shared cache. Configuration, methods, files, and validation limits are listed in [the timing implementation report](docs/fall_timing_changes.md).
-- [`MotionRule.h`](examples/simple_sensor/MotionRule.h) holds the configuration and decision logic without Arduino dependencies, dynamic allocation, or blocking waits. `peakAcceleration()` and `peakRotation()` preserve event-window peaks for the alert, rather than reporting the later quiet readings.
+- [`MyMesh::pollMotion()` in HealthMonitor.cpp](examples/companion_radio/HealthMonitor.cpp) passes fresh vector magnitudes to `MotionRule::update()` independently of pending alarms or delivery. Notifications coalesce while an earlier alert is pending. The detector's 60-second cooldown and quiet-rearm requirements remain in force.
+- The combined firmware collects environmental readings in a background task and serves telemetry from a bounded-age cache. OLED frames transfer in small pieces; battery readings use staged ADC acquisition and a shared cache. Configuration, methods, files, and validation limits are listed in [the timing implementation report](docs/fall_timing_changes.md).
+- [`MotionRule.h`](examples/companion_radio/health/MotionRule.h) holds the configuration and decision logic without Arduino dependencies, dynamic allocation, or blocking waits. `peakAcceleration()` and `peakRotation()` preserve event-window peaks for the alert, rather than reporting the later quiet readings.
 - The initial public alert uses `Possible fall: peak accel=%.2fg rotation=%.1fdeg/s`. The independent delivery controller retains it through local failures, then waits for repeater evidence. `health` reports both message states and motion outages/gaps. The [delivery implementation guide](docs/message_delivery_changes.md) maps directives to code and adjustment points.
 
 Chip temperature remains available in telemetry and the `motion` command; it is not body temperature. Gyroscope telemetry clips individual axes to the Cayenne encoding range of -327.68 to 327.67 degrees/second, while the detector, serial readings, and alert text retain the full measured range.
 
 ### Tuning and software checks
 
-Edit `FallDetectionConfig` at the top of [`MotionRule.h`](examples/simple_sensor/MotionRule.h) and rebuild to change the active defaults. Custom code can instead pass a configuration to the `MotionRule` constructor. These settings are compile-time configuration; there is no runtime command to change them.
+Edit `FallDetectionConfig` at the top of [`MotionRule.h`](examples/companion_radio/health/MotionRule.h) and rebuild to change the active defaults. Custom code can instead pass a configuration to the `MotionRule` constructor. These settings are compile-time configuration; there is no runtime command to change them.
 
 Set `confirm_quiet_ms = 0` to compare the low-acceleration/impact/rotation sequence without post-event quiet confirmation. Startup settling, sample validation, and cooldown still apply. Use the [tuning guide](docs/gy521_sensor.md#review-and-tune-the-algorithm) for configuration constraints and tradeoffs. Firm torso/chest attachment is the intended starting point; different placements require separate evaluation.
 
@@ -221,15 +215,15 @@ The entries cite the five supplied works, rather than reproducing the reference 
 Run the following commands from `SeniorHealthNode-MC`, with PlatformIO Core installed.
 
 1. Use a **Heltec V4.3 OLED** board and connect a GY-521: `VCC -> 3V3`, `GND -> GND`, `SDA -> GPIO4`, `SCL -> GPIO6`, and `AD0 -> GND` for address `0x68`.
-2. Set radio parameters to match your MeshCore network. Build and upload the sensor firmware with PlatformIO:
+2. Set radio parameters to match your MeshCore network. Build and upload the combined firmware with PlatformIO:
 
    ```powershell
-   pio run -e heltec_v4_sensor
-   pio run -e heltec_v4_sensor -t upload --upload-port COM_PORT
+   pio run -e heltec_v4_companion_radio_ble
+   pio run -e heltec_v4_companion_radio_ble -t upload --upload-port COM_PORT
    ```
 
 3. Connect a passive buzzer through a suitable driver on GPIO47, following the [wiring guide](docs/gy521_sensor.md#passive-buzzer-wiring-and-shared-functions). Configure the acknowledgement channel key, message and fallback location in [`HealthNodeConfig.h`](include/HealthNodeConfig.h), then rebuild after changing these settings.
-4. Add the configured public hashtag channel (initially `#falldetect`) to each receiving companion and match radio settings. Fall messages do not require contact registration. Change the sensor's default admin password (`password`) when setting up remote administration.
+4. Add the configured public hashtag channel (initially `#falldetect`) to each receiving companion and match radio settings. Fall messages do not require contact registration. Pair your phone with this node over BLE and configure its name, channels and radio settings through the MeshCore client.
 5. Use a serial monitor at **115200 baud** and enter `motion` to inspect the latest sensor reading. Test alert delivery with the intended recipient and at the intended location before relying on the setup.
 
 Replace `COM_PORT` with your board's port. The [GY-521 sensor guide](docs/gy521_sensor.md) has the full wiring table, recipient setup, commands, and validation steps. Use `health` to distinguish queueing, local TX, repeater evidence, and exhaustion. Confirm that the intended companion actually receives both public messages; a heard repeat is not recipient acknowledgment.
@@ -240,11 +234,11 @@ The native suites exercise synthetic motion sequences, SOS and button timing,
 battery policy, sensor faults, sampling-health diagnostics, and production public
 message delivery with injected radio failures. The `native_delivery` environment
 uses production Mesh/crypto code without the ordinary suite's crypto mocks.
-The recorded **2026-09-30** verification passed both firmware builds and merged
-images, along with **212/212 software tests**
-(190 native and 22 production transport cases). See the [delivery implementation
-report](docs/message_delivery_changes.md#validation-and-further-changes) and the
-[dated baseline results](docs/virtual-fault-testing.md). These checks concern
+The **2026-09-30** combined firmware build and merged image passed, along with
+**216/216 software tests** (194 native and 22 production transport cases).
+The linked image contains both BLE and health-monitoring code. See
+[build validation](docs/build-validation.md) for results and proof boundaries.
+These checks concern
 program behavior, not detection accuracy on people. The board has not been
 flashed for this change; buzzer electrical behavior, live sensor readings, radio
 coverage, and recipient delivery remain unverified. There is currently no dedicated
@@ -253,8 +247,8 @@ emergency services in this repository.
 
 ## Latest additions and modifications — 2026-09-30
 
-The latest implementation update (`d456c89`) adds public-message delivery tracking
-and motion-health diagnostics. Recent supporting changes add sampling-timing
+The current firmware combines BLE companion operation and fall detection in one image.
+Public-message delivery tracking and motion-health diagnostics run inside the companion. Recent supporting changes add sampling-timing
 improvements, a virtual fault suite, and a firmware-derived pin schematic.
 
 ### Public fall and assistance messages
@@ -295,7 +289,7 @@ At 115200 baud, enter `health` followed by carriage return to inspect:
 These diagnostics do not relax the detector's data guards or quiet-rearm rules.
 Serial input and character echo are capped at 16 bytes per loop pass; command
 execution and other blocking work can still delay sampling. See the [CLI
-reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/simple_sensor/MotionHealth.h).
+reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/companion_radio/health/MotionHealth.h).
 
 ### Timing, wiring, and regression coverage
 
@@ -317,7 +311,7 @@ reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/simple_sensor/M
   packet builder, Mesh/Dispatcher, encryption, and packet pool with a fake radio
   and clock. Added coverage includes queue expiry, TX failures, repeat matching,
   independent message streams, and sampling-health recovery. `verify.ps1` runs
-  both `native` and `native_delivery` after building both merged firmware images.
+  both `native` and `native_delivery` after building the combined firmware and merged image.
 
 The recorded September 30 verification reports **190 native + 22 transport = 212
 passing software tests**. This README update does not rerun those builds or tests.
