@@ -64,6 +64,9 @@ uint32_t Dispatcher::getCADFailMaxDuration() const {
 }
 
 void Dispatcher::loop() {
+  // Bound tracked queue residence even while CAD, budget, or another TX blocks
+  // radio work. Deadlines never abort a packet already handed to the radio.
+  expireQueuedTransmissions();
   if (millisHasNowPassed(next_floor_calib_time)) {
     _radio->triggerNoiseFloorCalibrate(getInterferenceThreshold());
     _radio->setCADEnabled(getCADEnabled());
@@ -112,6 +115,7 @@ void Dispatcher::loop() {
       } else {
         n_sent_direct++;
       }
+      notifyTxComplete(outbound, true);
       releasePacket(outbound);  // return to pool
       outbound = NULL;
     } else if (millisHasNowPassed(outbound_expiry)) {
@@ -198,7 +202,7 @@ void Dispatcher::checkRecv() {
     if (len > 0) {
       logRxRaw(_radio->getLastSNR(), _radio->getLastRSSI(), raw, len);
 
-      pkt = _mgr->allocNew();
+      pkt = obtainNewPacket();
       if (pkt == NULL) {
         MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): WARNING: received data, no unused packets available!", getLogDateTime());
       } else {
@@ -208,7 +212,7 @@ void Dispatcher::checkRecv() {
           air_time = _radio->getEstAirtimeFor(len);
           rx_air_time += air_time;
         } else {
-          _mgr->free(pkt);  // put back into pool
+          releasePacket(pkt);  // put back into pool
           pkt = NULL;
         }
       }
@@ -261,7 +265,7 @@ void Dispatcher::checkRecv() {
 void Dispatcher::processRecvPacket(Packet* pkt) {
   DispatcherAction action = onRecvPacket(pkt);
   if (action == ACTION_RELEASE) {
-    _mgr->free(pkt);
+    releasePacket(pkt);
   } else if (action == ACTION_MANUAL_HOLD) {
     // sub-class is wanting to manually hold Packet instance, and call releasePacket() at appropriate time
   } else {   // ACTION_RETRANSMIT*
@@ -319,7 +323,7 @@ void Dispatcher::checkSend() {
 
     if (len + outbound->payload_len > MAX_TRANS_UNIT) {
       MESH_DEBUG_PRINTLN("%s Dispatcher::checkSend(): FATAL: Invalid packet queued... too long, len=%d", getLogDateTime(), len + outbound->payload_len);
-      _mgr->free(outbound);
+      releasePacket(outbound);
       outbound = NULL;
     } else {
       memcpy(&raw[len], outbound->payload, outbound->payload_len); len += outbound->payload_len;
@@ -360,18 +364,49 @@ Packet* Dispatcher::obtainNewPacket() {
   } else {
     pkt->payload_len = pkt->path_len = 0;
     pkt->_snr = 0;
+    pkt->tx_tag = pkt->tx_deadline = 0;
   }
   return pkt;
 }
 
 void Dispatcher::releasePacket(Packet* packet) {
+  notifyTxComplete(packet, false);
   _mgr->free(packet);
+}
+
+void Dispatcher::notifyTxComplete(Packet* packet, bool sent) {
+  const uint32_t tag = packet->tx_tag;
+  packet->tx_tag = packet->tx_deadline = 0;
+  if (tag != 0) onPacketTxComplete(tag, sent);
+}
+
+void Dispatcher::expireQueuedTransmissions() {
+  const uint32_t now = static_cast<uint32_t>(_ms->getMillis());
+  // Reverse traversal examines each original queue entry once. A callback must
+  // defer new sends, so queue work remains bounded by its existing length.
+  for (int i = _mgr->getOutboundTotal() - 1; i >= 0; --i) {
+    Packet* packet = _mgr->getOutboundByIdx(i);
+    if (packet->tx_tag != 0 && static_cast<int32_t>(now - packet->tx_deadline) >= 0) {
+      releasePacket(_mgr->removeOutboundByIdx(i));
+    }
+  }
+}
+
+bool Dispatcher::cancelQueuedPacket(uint32_t tag) {
+  if (tag == 0) return false;
+  for (int i = 0; i < _mgr->getOutboundTotal(); ++i) {
+    if (_mgr->getOutboundByIdx(i)->tx_tag == tag) {
+      releasePacket(_mgr->removeOutboundByIdx(i));
+      return true;
+    }
+  }
+  return false;
 }
 
 void Dispatcher::sendPacket(Packet* packet, uint8_t priority, uint32_t delay_millis) {
   if (!Packet::isValidPathLen(packet->path_len) || packet->payload_len > MAX_PACKET_PAYLOAD) {
     MESH_DEBUG_PRINTLN("%s Dispatcher::sendPacket(): ERROR: invalid packet... path_len=%d, payload_len=%d", getLogDateTime(), (uint32_t) packet->path_len, (uint32_t) packet->payload_len);
-    _mgr->free(packet);
+    releasePacket(packet);
   } else {
     _mgr->queueOutbound(packet, priority, futureMillis(delay_millis));
   }

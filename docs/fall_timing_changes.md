@@ -57,8 +57,10 @@ Invalid data still clears detector evidence and requires quiet rearming.
 
 [`main.cpp`](../examples/simple_sensor/main.cpp), `MyMesh::pollMotion()`, gates
 analysis on sample validity/freshness rather than alarm or message state. It
-services motion at loop entry and again after radio work. An outstanding direct
-alert is retained, and new detections log that their notification was coalesced.
+services motion at loop entry and again after radio work. An outstanding public
+channel alert is retained, and new detections log that their notification was
+coalesced. The [message delivery guide](message_delivery_changes.md) describes
+current channel retries, repeater-echo confirmation, and serial health diagnostics.
 
 [`FallResponse.h`](../examples/simple_sensor/FallResponse.h), `onFall()`, reports
 whether a new SOS must start. An active SOS keeps its existing click progress.

@@ -50,6 +50,12 @@ public:
   uint8_t payload[MAX_PACKET_PAYLOAD];
   int8_t _snr;
 
+  // Local-only delivery tracking; never serialized or included in packet hashes.
+  // A nonzero tag enables one Dispatcher completion callback. Queue deadlines
+  // are absolute uint32_t milliseconds, less than 2^31 ms into the future.
+  uint32_t tx_tag;
+  uint32_t tx_deadline;
+
   /**
    * \brief calculate the hash of payload + type
    * \param  dest_hash   destination to store the hash (must be MAX_HASH_SIZE bytes)

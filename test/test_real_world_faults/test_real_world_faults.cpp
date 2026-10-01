@@ -1,3 +1,4 @@
+#include <AssistanceTestLink.h>
 #include <gtest/gtest.h>
 #define ESP32 // Exercise the production HAL-buffer path with transaction fakes.
 #include <helpers/sensors/MPU6050.h>
@@ -196,30 +197,37 @@ class RetryRecovery : public ::testing::TestWithParam<unsigned> {};
 TEST_P(RetryRecovery, AllocationRecoversOnceWithoutRestartingSos) {
   FaultRig r(UINT32_MAX - 4000); r.quiet(120); r.fall(); r.acknowledge();
   ASSERT_TRUE(r.response.messagePending());
+  AssistanceDelivery delivery; AssistanceTestLink link; link.start(delivery, r.now);
   for (unsigned attempt = 0; attempt <= GetParam(); ++attempt) {
-    ASSERT_TRUE(r.response.messageDue(r.now));
-    r.response.messageAttempted(r.now, attempt == GetParam());
-    EXPECT_FALSE(r.response.messageDue(r.now));
+    link.result = attempt == GetParam() ? AssistanceTransport::Queued : AssistanceTransport::NoPacket;
+    delivery.poll(r.now, link);
+    if (attempt == GetParam()) {
+      delivery.txComplete(r.now, link.tag, true);
+      EXPECT_TRUE(delivery.confirmRepeat(link.fingerprint));
+      r.response.messageCompleted();
+    }
     EXPECT_FALSE(r.buzzer.alarmActive());
     r.tick(HealthNodeConfig::ack_retry_ms - 1);
-    EXPECT_FALSE(r.response.messageDue(r.now));
+    delivery.poll(r.now, link); EXPECT_EQ(delivery.attemptCount(), attempt + 1);
     r.tick(1);
   }
   EXPECT_FALSE(r.response.messagePending());
-  r.tick(600000); EXPECT_FALSE(r.response.messageDue(r.now));
+  r.tick(600000); delivery.poll(r.now, link); EXPECT_FALSE(delivery.busy());
 }
 INSTANTIATE_TEST_SUITE_P(FirstMiddleLastAttempt, RetryRecovery, ::testing::Values(0u, 1u, 29u, 59u));
 
 TEST(RealWorldFaults, RetryExhaustionDoesNotBlockLaterDetectionOrAcknowledgment) {
   FaultRig r; r.quiet(120); r.fall(); r.acknowledge();
+  AssistanceDelivery delivery; AssistanceTestLink link; link.start(delivery, r.now);
   for (unsigned i = 0; i < HealthNodeConfig::ack_max_attempts; ++i) {
-    ASSERT_TRUE(r.response.messageDue(r.now));
-    r.response.messageAttempted(r.now, false);
+    ASSERT_TRUE(delivery.busy());
+    delivery.poll(r.now, link);
     r.quiet(250); // Motion continues during the five-second retry interval.
   }
-  EXPECT_FALSE(r.response.messagePending()); EXPECT_FALSE(r.response.messageDue(r.now));
+  EXPECT_EQ(delivery.state(), AssistanceDelivery::Failed);
+  r.response.messageCompleted(); EXPECT_FALSE(r.response.messagePending());
   r.fall(); EXPECT_EQ(r.falls, 2u); EXPECT_TRUE(r.buzzer.alarmActive());
-  r.acknowledge(); EXPECT_TRUE(r.response.messageDue(r.now));
+  r.acknowledge(); EXPECT_TRUE(r.response.messagePending());
 }
 
 TEST(RealWorldFaults, RebootClearsPendingRequestAndRequiresFreshFallEvidence) {

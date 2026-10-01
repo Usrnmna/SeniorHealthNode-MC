@@ -53,8 +53,13 @@ constexpr uint8_t ack_channel_key[] = {
 constexpr char ack_message[] = u8"Fall Detected & User Has Requested Assistance";
 constexpr char DefaultLocation[] = u8"HOME"; // Appended when the GPS provider has no valid location.
 constexpr uint8_t ack_path_hash_size = 1; // Flood route: 1, 2, or 3 bytes per hop.
-constexpr uint32_t ack_retry_ms = 5000;  // Retry LOCAL packet allocation only.
-constexpr uint8_t ack_max_attempts = 60; // No automatic RF delivery retries/ACKs.
+constexpr uint32_t ack_retry_ms = 5000;  // Nonblocking local/channel retry spacing.
+constexpr uint8_t ack_max_attempts = 60; // Total allocation/enqueue attempts per channel event.
+constexpr uint32_t assistance_queue_timeout_ms = 30000; // Drop stale QUEUED packets, then retry.
+constexpr uint32_t channel_repeat_wait_ms = 15000; // After TX, wait to hear a matching repeater echo.
+constexpr uint8_t channel_transmit_attempts = 4; // Successful local transmissions without hearing a repeat.
+constexpr uint32_t motion_fault_timeout_ms = 5000; // No fresh valid motion -> visible fault.
+constexpr unsigned serial_rx_bytes_per_loop = 16; // Bound serial input/echo work per sensor loop.
 
 static_assert(morse_dot_ms > 0 && sos_silence_ms > 0, "Buzzer durations must be positive");
 static_assert(low_battery_poll_ms > 0 && low_battery_repeat_ms > 0, "Invalid battery timing");
@@ -67,6 +72,12 @@ static_assert(environment_refresh_ms > 0 && environment_stale_ms > environment_r
 static_assert(charging_status_pin < 0 || charging_status_pin != buzzer_pin, "Charging/buzzer pin conflict");
 static_assert(debounce_ms > 0 && debounce_ms < long_press_ms, "Invalid debounce duration");
 static_assert(click_window_ms > 0 && ack_retry_ms > 0 && ack_max_attempts > 0, "Invalid timing");
+static_assert(assistance_queue_timeout_ms > 0 && assistance_queue_timeout_ms < 0x80000000UL &&
+              channel_repeat_wait_ms > 0 && channel_repeat_wait_ms < 0x80000000UL &&
+              channel_transmit_attempts > 0 && channel_transmit_attempts <= ack_max_attempts &&
+              ack_retry_ms < 0x80000000UL && motion_fault_timeout_ms > 100 &&
+              motion_fault_timeout_ms < 0x80000000UL, "Invalid delivery/health deadlines");
+static_assert(serial_rx_bytes_per_loop > 0 && serial_rx_bytes_per_loop <= 159, "Invalid serial work budget");
 static_assert(sizeof(ack_channel_key) == 16 || sizeof(ack_channel_key) == 32, "Key must be 16 or 32 bytes");
 static_assert(ack_path_hash_size >= 1 && ack_path_hash_size <= 3, "Invalid path hash size");
 }

@@ -86,19 +86,14 @@ TEST(FallResponse, DuplicateFallDoesNotRestartGesture) {
   EXPECT_FALSE(click(r, 100)); r.onFall(300, false);
   EXPECT_FALSE(click(r, 400)); EXPECT_TRUE(click(r, 700));
 }
-TEST(FallResponse, PacketAllocationRetriesBoundedAndStopOnSuccess) {
+TEST(FallResponse, RequestStaysPendingUntilDeliveryControllerCompletes) {
   FallResponse r; r.onFall(0, false);
   click(r, 100); click(r, 400); EXPECT_TRUE(click(r, 700));
-  EXPECT_TRUE(r.messageDue(825)); r.messageAttempted(825, false);
-  EXPECT_FALSE(r.messageDue(825 + HealthNodeConfig::ack_retry_ms - 1));
-  EXPECT_TRUE(r.messageDue(825 + HealthNodeConfig::ack_retry_ms));
-  r.messageAttempted(825 + HealthNodeConfig::ack_retry_ms, true); EXPECT_FALSE(r.messagePending());
+  EXPECT_TRUE(r.messagePending()); EXPECT_FALSE(r.alarmActive());
+  // Elapsed time and a new acknowledged fall cannot silently clear the request.
   r.onFall(2000, false); click(r, 2100); click(r, 2400); click(r, 2700);
-  uint32_t now = 2825;
-  for (unsigned i = 0; i < HealthNodeConfig::ack_max_attempts; ++i) {
-    EXPECT_TRUE(r.messageDue(now)); r.messageAttempted(now, false); now += HealthNodeConfig::ack_retry_ms;
-  }
-  EXPECT_FALSE(r.messagePending()); EXPECT_FALSE(r.alarmActive());
+  EXPECT_TRUE(r.messagePending()); EXPECT_FALSE(r.alarmActive());
+  r.messageCompleted(); EXPECT_FALSE(r.messagePending());
 }
 TEST(FallResponse, RebootClearsAlarmMessageAndMotionEvidence) {
   FallResponse r; r.onFall(0, false); EXPECT_TRUE(r.alarmActive());
@@ -108,7 +103,7 @@ TEST(FallResponse, RebootClearsAlarmMessageAndMotionEvidence) {
   EXPECT_TRUE(buzzer.alarmActive()); EXPECT_FALSE(reboot_buzzer.sounding());
   EXPECT_FALSE(reboot_buzzer.alarmActive());
   click(r, 100); click(r, 400); click(r, 700); EXPECT_TRUE(r.messagePending());
-  EXPECT_FALSE(reboot.messageDue(10000));
+  EXPECT_FALSE(reboot.messagePending());
   MotionRule motion;
   for (uint32_t now = 0; now <= 2000; now += 20) motion.update(now, 1, 0, true);
   motion.update(2020, 0.3f, 0, true); motion.update(2040, 3, 300, true);
@@ -120,9 +115,8 @@ TEST(FallResponse, TimersSurviveMillisRollover) {
   FallResponse r; r.onFall(start, false);
   EXPECT_FALSE(click(r, start + 10)); EXPECT_FALSE(click(r, start + 310));
   EXPECT_TRUE(click(r, start + 610));
-  r.messageAttempted(start + 735, false);
-  EXPECT_FALSE(r.messageDue(start + 735 + HealthNodeConfig::ack_retry_ms - 1));
-  EXPECT_TRUE(r.messageDue(start + 735 + HealthNodeConfig::ack_retry_ms));
+  EXPECT_TRUE(r.messagePending());
+  r.messageCompleted(); EXPECT_FALSE(r.messagePending());
   BuzzerPattern p(150, 5000); p.startSOS(start);
   p.update(start + 149); EXPECT_TRUE(p.sounding());
   p.update(start + 150); EXPECT_FALSE(p.sounding());
@@ -252,7 +246,7 @@ int main() {
   FallResponse_HeldButtonAtFallIsIgnored();
   FallResponse_ClicksBeforeFallNeverAcknowledge();
   FallResponse_DuplicateFallDoesNotRestartGesture();
-  FallResponse_PacketAllocationRetriesBoundedAndStopOnSuccess();
+  FallResponse_RequestStaysPendingUntilDeliveryControllerCompletes();
   FallResponse_RebootClearsAlarmMessageAndMotionEvidence();
   FallResponse_TimersSurviveMillisRollover();
   FallResponse_SosHasNineMarksAndFiveSecondsSilence();

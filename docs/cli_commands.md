@@ -1023,6 +1023,24 @@ region save
 
 ### Sensors (When sensor support is compiled in)
 
+#### View fall-message delivery and motion health (SeniorHealthNode sensor)
+
+**Usage:** `health`
+
+Available in `heltec_v4_sensor` with MPU6050 support. Over serial, use 115200 baud
+and terminate the command with carriage return. The reply contains `fall`, `help`,
+`motion`, `max_gap_ms`, and `gaps`.
+
+`fall` and `help` report the independent initial-fall and post-click public-channel
+events. States distinguish queueing, local transmission, repeater echo evidence,
+and exhausted/unconfirmed delivery. A repeater echo is not a recipient receipt.
+`motion=FAULT` means fresh valid samples have been absent for the configured
+timeout; `monitoring` is not a guarantee that the detector is armed. Gap statistics
+describe completed intervals between fresh valid samples and reset on reboot.
+This command does not change settings, send a fall message, or alter the OLED.
+
+See [message-delivery directives and settings](message_delivery_changes.md).
+
 #### View the list of sensors on this node
 **Usage:** `sensor list [start]`
 

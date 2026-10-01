@@ -23,6 +23,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Firmware build or binary merge failed.' }
     & $Python -m platformio test -e native
     if ($LASTEXITCODE -ne 0) { throw 'Native tests failed.' }
+    & $Python -m platformio test -e native_delivery
+    if ($LASTEXITCODE -ne 0) { throw 'Production message-delivery integration tests failed.' }
     Write-Host 'Both firmware builds, merged images, and all native suites passed.'
 }
 finally {

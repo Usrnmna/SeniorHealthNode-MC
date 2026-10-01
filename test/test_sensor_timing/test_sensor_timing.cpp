@@ -1,3 +1,4 @@
+#include <AssistanceTestLink.h>
 #include <gtest/gtest.h>
 #define ESP32 // Exercise the same local-buffer HAL branch as the sensor firmware.
 #include <helpers/sensors/MPU6050.h>
@@ -130,13 +131,16 @@ TEST(SensorTiming, NewFallAndAcknowledgmentDoNotResetOlderMessageRetryBudget) {
     response.updateButton(t+100, false); return response.updateButton(t+125, false);
   };
   click(100); click(300); ASSERT_TRUE(click(500));
-  response.messageAttempted(700, false);
+  AssistanceDelivery delivery; AssistanceTestLink link; link.start(delivery, 700);
+  delivery.poll(700, link); EXPECT_EQ(delivery.attemptCount(), 1);
   ASSERT_TRUE(response.onFall(1000, false));
   click(1100); click(1300); ASSERT_TRUE(click(1500));
-  EXPECT_FALSE(response.messageDue(1600)); // Existing retry timer survives.
-  EXPECT_TRUE(response.messageDue(5700));
+  link.start(delivery, 1600); // Coalesced event cannot restart delivery budget.
+  delivery.poll(1600, link); EXPECT_EQ(delivery.attemptCount(), 1);
   for (unsigned i=1;i<HealthNodeConfig::ack_max_attempts;++i)
-    response.messageAttempted(700 + 5000*i, false);
+    delivery.poll(700 + 5000*i, link);
+  EXPECT_EQ(delivery.state(), AssistanceDelivery::Failed);
+  response.messageCompleted();
   EXPECT_FALSE(response.messagePending());
 }
 
