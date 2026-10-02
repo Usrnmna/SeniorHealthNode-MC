@@ -2,9 +2,13 @@
 
 **MeshCore-based motion monitoring and mesh alerts for people who may be unable to reach a phone.**
 
-See [latest additions and modifications](#latest-additions-and-modifications--2026-09-30) for the recent delivery, diagnostics, timing, wiring, and test updates.
+SeniorHealthNode is designed for older adults, people with limited mobility, and anyone who lives or works alone. It offers an extra layer of connection for those who may need help when a phone is out of reach or difficult to use. It monitors movement and sends alerts to others when it detects a possible fall or the wearer requests help.
 
-SeniorHealthNode explores how MeshCore's decentralized radio mesh can help older adults and people with disabilities call attention to a possible need for help. A firmly worn torso/chest node can notice a possible-fall motion sequence and send an alert through a MeshCore network on a configured public channel, including in places where a phone is out of reach or conventional connectivity is unavailable. The aim is to give people and caregivers another way to stay connected while supporting greater independence.
+The aim is to support independence while giving family members, caregivers, or others a way to notice when someone may need assistance. The device is worn firmly on the torso or chest so that it moves with the person. In the current version, the wearer can request assistance after a possible-fall alarm; this is not a standalone help button available at any time.
+
+Alerts travel over MeshCore, a network of small radios that can pass messages between devices without relying on cellular service or an internet connection. Other people need compatible equipment set up to receive those messages, and radio coverage determines how far they can travel. Movement monitoring continues on the worn device even when its phone connection is disconnected.
+
+The sections below explain how this prototype works, what equipment and setup it needs, and its current limitations. See [latest additions and modifications](#latest-additions-and-modifications--2026-09-30) for the recent delivery, diagnostics, timing, wiring, and test updates.
 
 This repository is based on **MeshCore 1.17.0**. It retains the normal MeshCore radio, identity, telemetry, and contact-based messaging foundations. The **single firmware image combines the MeshCore BLE companion and local fall detection on the same Heltec V4.3 OLED node**. A phone connects to this node over BLE; motion monitoring and public-channel alerts run locally even when the phone is disconnected.
 
