@@ -5,6 +5,59 @@ Numbers below are **ESP32 GPIO numbers**, not connector positions or IC package
 pin numbers. Arrows show signal direction; `<-->` is bidirectional.
 Onboard connections are already wired on the Heltec PCB.
 
+## At-a-glance connection chart
+
+One Heltec runs both MeshCore BLE companion and fall detection. Connections
+below use module signal labels, not the left-to-right order of header pins.
+
+```text
+                         HELTEC V4 OLED / ESP32-S3
+                         ========================
+EXTERNAL CONNECTIONS
+  GY-521 / MPU6050 VCC  ---------------- 3V3
+                  GND  ---------------- GND
+                  SDA  ---------------- GPIO4  (Wire1 data)
+                  SCL  ---------------- GPIO6  (Wire1 clock)
+                  AD0  ---------------- GND    (address 0x68)
+                  INT, XDA, XCL -------- no connection
+
+  Passive buzzer driver IN ------------ GPIO47 (PWM control)
+                        GND ----------- GND
+                        V+ ------------ buzzer-rated supply
+                        OUT ----------- passive buzzer (driver-specific)
+
+OPTIONAL EXTERNAL CONNECTIONS
+  GPS module TX ----------------------- GPIO38 (ESP32 RX)
+             RX ----------------------- GPIO39 (ESP32 TX)
+             GND ---------------------- GND
+             reset interface ---------- GPIO42 (active LOW)*
+             enable interface --------- GPIO34 (active LOW)*
+             supply ------------------- module-specific*
+
+  RTC module SDA ---------------------- GPIO17 (Wire data)
+             SCL ---------------------- GPIO18 (Wire clock)
+             VCC ---------------------- 3V3 (compatible breakout only)
+             GND ---------------------- GND
+
+ALREADY CONNECTED ON THE HELTEC PCB
+  OLED       SDA / SCL / RESET --------- GPIO17 / GPIO18 / GPIO21
+  SX1262     NSS / SCK ----------------- GPIO8 / GPIO9
+             MOSI / MISO --------------- GPIO10 / GPIO11
+             NRESET / BUSY / DIO1 ------ GPIO12 / GPIO13 / GPIO14
+  V4.3 FEM   CSD / CTX ----------------- GPIO2 / GPIO5
+  FEM supply enable ------------------- GPIO7
+  PRG button -------------------------- GPIO0 (pressed = GND)
+  TX LED ------------------------------ GPIO35
+  Vext enable ------------------------- GPIO36
+  Battery divider enable / ADC -------- GPIO37 / GPIO1
+
+  * GPS connector, supply, and control circuitry require the actual module
+    pinout. These are firmware assignments, not verified connector positions.
+```
+
+Use the explicit bus assignments above: generic Arduino `SDA`/`SCL` defaults
+in `pins_arduino.h` are not this firmware's external sensor connections.
+
 ## External motion sensor and buzzer
 
 ```text
@@ -114,20 +167,39 @@ Heltec GPIO4 <--> module SDA     Heltec 3V3 --> module 3.3 V supply input
 Heltec GPIO6 ---> module SCL     Heltec GND --- module GND
 ```
 
-| Supported chip | Address used by this build |
-| --- | --- |
-| AHT10 / AHT20 | 0x38 |
-| BME680, BME280, BMP280 | 0x76 (alternatives at this address) |
-| BMP085 | 0x77 |
-| SHTC3 | 0x70 |
-| SHT4X | 0x44 |
-| LPS22HB | 0x5C |
-| INA3221 | 0x42 |
-| INA219 | 0x40 |
-| INA260 | 0x41 |
-| INA226 | 0x44 (conflicts with SHT4X) |
-| MLX90614 | 0x5A |
-| VL53L0X | 0x29 |
+```text
+OPTIONAL SENSOR BREAKOUT       SDA TO     SCL TO     SUPPLY*  GROUND  ADDRESS
+----------------------------  ---------  ---------  -------  ------  -------
+AHT10 / AHT20                 GPIO4      GPIO6      3V3      GND     0x38
+BME680                        GPIO4      GPIO6      3V3      GND     0x76
+BME280                        GPIO4      GPIO6      3V3      GND     0x76
+BMP280                        GPIO4      GPIO6      3V3      GND     0x76
+BMP085                        GPIO4      GPIO6      3V3      GND     0x77
+SHTC3                         GPIO4      GPIO6      3V3      GND     0x70
+SHT4X                         GPIO4      GPIO6      3V3      GND     0x44
+LPS22HB                       GPIO4      GPIO6      3V3      GND     0x5C
+INA3221                       GPIO4      GPIO6      3V3      GND     0x42
+INA219                        GPIO4      GPIO6      3V3      GND     0x40
+INA260                        GPIO4      GPIO6      3V3      GND     0x41
+INA226                        GPIO4      GPIO6      3V3      GND     0x44
+MLX90614                      GPIO4      GPIO6      3V3      GND     0x5A
+VL53L0X                       GPIO4      GPIO6      3V3      GND     0x29
+
+OPTIONAL RTC BREAKOUT          SDA TO     SCL TO     SUPPLY*  GROUND  ADDRESS
+----------------------------  ---------  ---------  -------  ------  -------
+DS3231                        GPIO17     GPIO18     3V3      GND     0x68
+RV3028                        GPIO17     GPIO18     3V3      GND     0x52
+PCF8563                       GPIO17     GPIO18     3V3      GND     0x51
+RX8130CE                      GPIO17     GPIO18     3V3      GND     0x32
+
+* Supply column applies only to a breakout accepting 3.3 V power and logic.
+  Use its documented power-input label; VIN/VCC/3V3 are not interchangeable
+  on every module. Current-monitor supply is separate from measured inputs.
+```
+
+Each bus is shared: SDA connections join in parallel, as do SCL connections.
+BME680/BME280/BMP280 are alternatives at 0x76; SHT4X and INA226 conflict at
+0x44. These rows list supported choices, not a requirement to fit every chip.
 
 Do not connect two devices with the same address to this bus unchanged.
 Changing an address strap alone is insufficient if the driver still probes the
