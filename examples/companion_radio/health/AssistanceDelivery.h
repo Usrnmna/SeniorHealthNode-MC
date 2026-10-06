@@ -1,17 +1,20 @@
 #pragma once
 #include <HealthNodeConfig.h>
 #include "FallAckMessage.h"
+#include "FallChannel.h"
 
-// Public channel only. Repeat confirmation is a matching RF rebroadcast, not a DM ACK.
+// Group channel text. Repeat confirmation is a matching RF rebroadcast, not a DM ACK.
 class AssistanceTransport {
 public:
   enum Result { Queued, NoPacket, InvalidPayload };
   virtual uint32_t uniqueTimestamp() = 0;
   virtual Result queueAssistance(const uint8_t* data, unsigned len, uint32_t tag,
-                                uint8_t fingerprint[8]) = 0;
+                                uint8_t fingerprint[8], const FallChannel& channel) = 0;
+  // Remove a queued obsolete warning if possible; never abort a transmission.
+  virtual void cancelAssistance(uint32_t tag) = 0;
 };
 
-// One volatile public channel event. No waits, heap allocation or UI changes.
+// One volatile channel event. No waits, heap allocation or UI changes.
 // Two instances (fall and assistance) allow both essential texts to progress.
 class AssistanceDelivery {
 public:
@@ -19,15 +22,26 @@ public:
   enum Failure { None, InvalidText, AttemptsExhausted, NoRepeat };
   // Distinct seeds 0/1 allocate even/odd tags for two concurrent message owners.
   explicit AssistanceDelivery(uint32_t tag_seed = 0) : next_tag(tag_seed) {}
-  bool begin(uint32_t now, AssistanceTransport&, const uint8_t* payload, unsigned len) {
+  // Retire an obsolete event before cancelling its queued packet. Clearing the
+  // tag/hashes first makes synchronous cancellation and late RF callbacks inert.
+  // Keep next_tag so the replacement cannot inherit an old callback's identity.
+  void supersede(AssistanceTransport& link) {
+    const uint32_t old_tag = active_tag;
+    active_tag = 0; fingerprint_count = 0;
+    state_code = Idle; failure_code = None;
+    if (old_tag) link.cancelAssistance(old_tag);
+  }
+  bool begin(uint32_t now, AssistanceTransport&, const uint8_t* payload, unsigned len,
+             const FallChannel& channel = FallChannel{}) {
     if (busy()) return false; // Coalesce without resetting an existing retry budget.
     attempts = transmissions = fingerprint_count = 0;
     attempted = false; failure_code = None; active_tag = 0; changed_at = now;
-    if (len < 5 || len > sizeof(body)) {
+    if (len < 5 || len > sizeof(body) || !channel.valid()) {
       state_code = Failed; failure_code = InvalidText; return true;
     }
+    destination = channel;
     memcpy(body, payload, len); body_len = len;
-    body[4] = 0; // Standard plain public channel text.
+    body[4] = 0; // Standard plain channel text.
     state_code = Pending;
     return true;
   }
@@ -44,13 +58,13 @@ public:
     }
     attempted = true; changed_at = now; ++attempts;
     // A fresh standard timestamp bypasses repeater packet dedup on retries.
-    // Public receivers may display duplicate text; no recipient-level exactly-once claim.
+    // Receivers may display duplicate text; no recipient-level exactly-once claim.
     const uint32_t timestamp = link.uniqueTimestamp();
     for (unsigned b = 0; b < 4; ++b) body[b] = uint8_t(timestamp >> (8*b));
     next_tag += 2; if (next_tag == 0) next_tag += 2;
     active_tag = next_tag; state_code = Queued;
     uint8_t fingerprint[8];
-    const auto result = link.queueAssistance(body, body_len, active_tag, fingerprint);
+    const auto result = link.queueAssistance(body, body_len, active_tag, fingerprint, destination);
     if (result == AssistanceTransport::InvalidPayload) {
       active_tag = 0; state_code = Failed; failure_code = InvalidText;
     } else if (result == AssistanceTransport::NoPacket) {
@@ -93,6 +107,7 @@ public:
     }
   }
 private:
+  FallChannel destination;
   void retryOrFail() {
     if (attempts >= HealthNodeConfig::ack_max_attempts) {
       state_code = Failed; failure_code = AttemptsExhausted;

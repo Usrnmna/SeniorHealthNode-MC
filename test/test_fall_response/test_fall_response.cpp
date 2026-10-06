@@ -8,10 +8,10 @@
 #include <gtest/gtest.h>
 #endif
 #include <helpers/ui/BuzzerPattern.h>
-#include "../../examples/simple_sensor/FallResponse.h"
-#include "../../examples/simple_sensor/FallAckMessage.h"
-#include "../../examples/simple_sensor/FallAckLocation.h"
-#include "../../examples/simple_sensor/MotionRule.h"
+#include "../../examples/companion_radio/health/FallResponse.h"
+#include "../../examples/companion_radio/health/FallAckMessage.h"
+#include "../../examples/companion_radio/health/FallAckLocation.h"
+#include "../../examples/companion_radio/health/MotionRule.h"
 
 static bool click(TripleClick& button, uint32_t start, uint32_t duration = 100) {
   EXPECT_FALSE(button.update(start, true));
@@ -86,14 +86,14 @@ TEST(FallResponse, DuplicateFallDoesNotRestartGesture) {
   EXPECT_FALSE(click(r, 100)); r.onFall(300, false);
   EXPECT_FALSE(click(r, 400)); EXPECT_TRUE(click(r, 700));
 }
-TEST(FallResponse, RequestStaysPendingUntilDeliveryControllerCompletes) {
+TEST(FallResponse, RequestStaysPendingUntilOutboxAcceptsOwnership) {
   FallResponse r; r.onFall(0, false);
   click(r, 100); click(r, 400); EXPECT_TRUE(click(r, 700));
   EXPECT_TRUE(r.messagePending()); EXPECT_FALSE(r.alarmActive());
   // Elapsed time and a new acknowledged fall cannot silently clear the request.
   r.onFall(2000, false); click(r, 2100); click(r, 2400); click(r, 2700);
   EXPECT_TRUE(r.messagePending()); EXPECT_FALSE(r.alarmActive());
-  r.messageCompleted(); EXPECT_FALSE(r.messagePending());
+  r.messageAccepted(); EXPECT_FALSE(r.messagePending());
 }
 TEST(FallResponse, RebootClearsAlarmMessageAndMotionEvidence) {
   FallResponse r; r.onFall(0, false); EXPECT_TRUE(r.alarmActive());
@@ -116,7 +116,7 @@ TEST(FallResponse, TimersSurviveMillisRollover) {
   EXPECT_FALSE(click(r, start + 10)); EXPECT_FALSE(click(r, start + 310));
   EXPECT_TRUE(click(r, start + 610));
   EXPECT_TRUE(r.messagePending());
-  r.messageCompleted(); EXPECT_FALSE(r.messagePending());
+  r.messageAccepted(); EXPECT_FALSE(r.messagePending());
   BuzzerPattern p(150, 5000); p.startSOS(start);
   p.update(start + 149); EXPECT_TRUE(p.sounding());
   p.update(start + 150); EXPECT_FALSE(p.sounding());
@@ -246,7 +246,7 @@ int main() {
   FallResponse_HeldButtonAtFallIsIgnored();
   FallResponse_ClicksBeforeFallNeverAcknowledge();
   FallResponse_DuplicateFallDoesNotRestartGesture();
-  FallResponse_RequestStaysPendingUntilDeliveryControllerCompletes();
+  FallResponse_RequestStaysPendingUntilOutboxAcceptsOwnership();
   FallResponse_RebootClearsAlarmMessageAndMotionEvidence();
   FallResponse_TimersSurviveMillisRollover();
   FallResponse_SosHasNineMarksAndFiveSecondsSilence();

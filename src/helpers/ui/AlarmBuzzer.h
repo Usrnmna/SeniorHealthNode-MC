@@ -3,7 +3,7 @@
 #include <HealthNodeConfig.h>
 #include "BuzzerPattern.h"
 
-// Shared nonblocking passive-buzzer API for the heltec_v4_sensor firmware.
+// Shared nonblocking passive-buzzer API for the heltec_v4_companion_radio_ble firmware.
 // One instance is defined in main.cpp. Do not share its LEDC channel with tone().
 class AlarmBuzzer {
 public:

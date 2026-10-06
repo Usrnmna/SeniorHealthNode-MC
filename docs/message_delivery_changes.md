@@ -1,20 +1,20 @@
 # Fall message delivery: implementation and adjustment guide
 
-This document records the directive behind the delivery changes and maps it to
-the code for manual review. Both essential notifications use the configured
-**public channel**, initially `#falldetect`. They do not use direct messages or
+This document records the directive for channel delivery and maps it to
+the code for manual review. Both notification streams use the configured
+**group channel**, initially public `#falldetect`, with runtime public/private selection. They do not use direct messages or
 require a registered caregiver contact. The initial possible-fall alert and the
-post-click assistance request have independent delivery state.
+response messages have independent delivery state.
 
 ## Directives and implementation
 
 | Directive | Implemented behavior | Code to review |
 | --- | --- | --- |
-| 1. Retain essential requests through local transmission failures | Queue acceptance preserves the request. Packet allocation failure, transmit-start failure, transmit timeout, and queue expiry cause bounded delayed retries. | [`AssistanceDelivery.h`](../examples/simple_sensor/AssistanceDelivery.h): `begin`, `poll`, `txComplete`; [`Dispatcher.cpp`](../src/Dispatcher.cpp): `notifyTxComplete`, `releasePacket`, `expireQueuedTransmissions` |
-| 2. Obtain delivery evidence within the public-channel requirement | The original recommendation to add direct-message acknowledgments was superseded by the public-channel directive. Both messages use group text. A matching received flood with a nonempty forwarding path records a repeater echo; it never claims a named recipient received or read the message. | [`FallAckSender.h`](../examples/simple_sensor/FallAckSender.h): `queueGroup`, `observeRepeat`; [`main.cpp`](../examples/simple_sensor/main.cpp): `filterRecvFloodPacket` |
-| 3. Make unsuccessful delivery visible | Serial state transitions and the `health` command distinguish pending, queued, locally transmitted, repeater echo heard, invalid text, exhausted retries, and no repeat heard. Triple-click still silences SOS. No OLED/UI changes or new audible failure indication are introduced. | `main.cpp`: `reportAssistance`, `pollFallResponse`, `handleCustomCommand` |
-| 4. Expose interruptions without accepting stale fall evidence | Fresh-sample interval diagnostics and a prolonged motion-data fault are independent of delivery. Invalid data and gaps over the detector limit still discard partial fall evidence. | [`MotionHealth.h`](../examples/simple_sensor/MotionHealth.h): `observe`; `main.cpp`: `pollMotion`; existing [`MotionRule.h`](../examples/simple_sensor/MotionRule.h): `update` |
-| 5. Test the production delivery path under faults | Native tests exercise the delivery controller, public packet builder, Mesh/Dispatcher, packet pool, and encryption with a fake radio/clock. Separate tests exercise motion-health recovery and existing fall/buzzer rules. | [`test_assistance_delivery`](../test/test_assistance_delivery/test_assistance_delivery.cpp), [`test_dispatcher_delivery`](../test/test_dispatcher_delivery/test_dispatcher_delivery.cpp), [`test_motion_health`](../test/test_motion_health/test_motion_health.cpp) |
+| 1. Retain essential requests through local transmission failures | Queue acceptance preserves the request. Packet allocation failure, transmit-start failure, transmit timeout, and queue expiry cause bounded delayed retries. | [`AssistanceDelivery.h`](../examples/companion_radio/health/AssistanceDelivery.h): `begin`, `poll`, `txComplete`; [`Dispatcher.cpp`](../src/Dispatcher.cpp): `notifyTxComplete`, `releasePacket`, `expireQueuedTransmissions` |
+| 2. Obtain delivery evidence for group-channel messages | Both streams use group text on the selected public or private channel. A matching received flood with a nonempty forwarding path records a repeater echo; it never claims a named recipient received or read the message. | [`FallAckSender.h`](../examples/companion_radio/health/FallAckSender.h): `queueGroup`, `observeRepeat`; [`MyMesh.cpp`](../examples/companion_radio/MyMesh.cpp): `filterRecvFloodPacket` |
+| 3. Make unsuccessful delivery visible | Serial state transitions and the `health` command distinguish pending, queued, locally transmitted, repeater echo heard, invalid text, exhausted retries, and no repeat heard. Triple-click still silences SOS. Delivery status is reported over serial; there is no additional audible failure indication. | `HealthMonitor.cpp`: `reportAssistance`, `pollFallResponse`, `handleHealthCommand` |
+| 4. Expose interruptions without accepting stale fall evidence | Fresh-sample interval diagnostics and a prolonged motion-data fault are independent of delivery. Invalid data and gaps over the detector limit still discard partial fall evidence. | [`MotionHealth.h`](../examples/companion_radio/health/MotionHealth.h): `observe`; `HealthMonitor.cpp`: `pollMotion`; existing [`MotionRule.h`](../examples/companion_radio/health/MotionRule.h): `update` |
+| 5. Test the production delivery path under faults | Native tests exercise the delivery controller, group-text packet builder, Mesh/Dispatcher, packet pool, and encryption with a fake radio/clock. Separate tests exercise motion-health recovery and existing fall/buzzer rules. | [`test_assistance_delivery`](../test/test_assistance_delivery/test_assistance_delivery.cpp), [`test_dispatcher_delivery`](../test/test_dispatcher_delivery/test_dispatcher_delivery.cpp), [`test_motion_health`](../test/test_motion_health/test_motion_health.cpp) |
 
 ## Event and state contract
 
@@ -33,9 +33,13 @@ Node name: Fall Detected & User Has Requested Assistance | HOME
 Node name: Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-122.654321
 ```
 
-Each controller owns one volatile event. Another event of the same kind coalesces
-while its controller is busy, preserving the existing retry budget and text.
-The two controllers can progress concurrently using distinct local packet tags.
+The initial-alert controller owns one volatile event and coalesces repeated alerts
+while busy. Response delivery uses a bounded outbox: one active event, one waiting
+ordinary event, and a reserved confirmation slot. A full slot leaves the request
+pending in `FallResponse`; repeated unscheduled ordinary events may coalesce, but
+a pending confirmation is protected. Each accepted event freezes its node name,
+text and location. Initial-alert and response delivery progress concurrently using
+distinct local packet tags. Response parts share one controller and run sequentially.
 Neither waiting for radio work nor waiting for a repeat pauses motion analysis,
 button processing, or buzzer servicing. The main loop remains cooperative: a
 blocking operation elsewhere can still delay all these services.
@@ -73,28 +77,96 @@ recorded frame with a forwarding path can also satisfy this evidence check.
 ## Manual settings
 
 Edit [`include/HealthNodeConfig.h`](../include/HealthNodeConfig.h), then rebuild
-`heltec_v4_sensor`. These settings are compile-time constants, not CLI commands.
+`heltec_v4_companion_radio_ble`. The table below describes compiled defaults. Select the channel at runtime with the [USB/BLE commands](cli_commands.md#fall-message-channel-usb-and-ble); the other settings require rebuilding.
 
 | Setting | Default | Adjustment and effect |
 | --- | --- | --- |
-| `ack_channel_name`, `ack_channel_key` | `#falldetect` and its 16-byte hashtag key | Both fall streams use this destination. The label is diagnostic; the key selects the actual channel. Change them together and configure the same public channel on receiving companions. A companion's local slot number is not a destination. |
+| `ack_channel_name`, `ack_channel_key` | `#falldetect` and its 16-byte hashtag key | Fallback when no saved channel selection exists. Use `set fall.channel public #name` or `set fall.channel private Name <shared-key>` for runtime changes. Each incident retains its original key; new incidents use the saved selection. A local slot number is not a destination. |
 | `ack_message` | `Fall Detected & User Has Requested Assistance` | Exact post-click UTF-8 text. The initial `Possible fall` format is in `MyMesh::pollMotion()`. |
+| `response_timeout_ms` | `30000` ms | Fixed deadline from the declared fall/SOS start. Partial clicks and duplicate detections do not extend it. |
+| `residual_quiet_required_ms` | `10000` ms | Continuous quiet ending at the response deadline; must be positive and no longer than the response timeout. |
+| `residual_max_sample_gap_ms` | `100` ms | Maximum fresh-sample gap and tolerated age at the deadline. Invalid data also resets quiet evidence. |
+| `residual_acceleration_change_g` | `0.08` g | Maximum acceleration-vector change from the quiet baseline; accumulated drift can break quiet. |
+| `residual_gravity_tolerance_g` | `0.08` g | Maximum acceleration-magnitude deviation from 1 g during quiet. |
+| `residual_rotation_dps` | `5.0` degrees/s | Rotation at or above this value breaks quiet. |
+| `unconfirmed_message`, `no_movement_message`, `confirmed_message` | Exact user-response texts below | Plain UTF-8 text without leading separators. Rebuild after editing. |
 | `DefaultLocation` | `HOME` | Assistance suffix when the existing location provider supplies no usable fix. A valid fix is captured once per event; no GPS freshness limit is added. |
-| `ack_path_hash_size` | `1` byte per hop | Existing public flood route encoding; allowed values 1, 2, or 3. |
+| `ack_path_hash_size` | `1` byte per hop | Group-message flood route encoding; allowed values 1, 2, or 3. |
 | `ack_retry_ms` | `5000` ms | Delay after an allocation or local TX failure before the next attempt. |
 | `ack_max_attempts` | `60` | Total allocation/enqueue attempts per event, including successful attempts. This also sizes stored attempt fingerprints. |
 | `assistance_queue_timeout_ms` | `30000` ms | Maximum tracked queue residence before failure callback and retry. Shared by both streams. |
 | `channel_repeat_wait_ms` | `15000` ms | Wait after each successful local TX for a matching repeat before retrying. |
 | `channel_transmit_attempts` | `4` | Maximum locally successful sends without repeat evidence. Failed local sends still consume the total attempt budget. |
 | `motion_fault_timeout_ms` | `5000` ms | Time without a fresh valid sample before reporting motion unavailable. It does not change the detector's sampling-gap guard. |
-| `serial_rx_bytes_per_loop` | `16` bytes | Caps serial command input and character echo per loop pass. Command execution and other I/O still need hardware timing measurements. |
+| `serial_rx_bytes_per_loop` | `16` bytes | Caps serial command input per loop pass; firmware character echo is disabled. Command execution and other I/O still need hardware timing measurements. |
 
 Despite their historical `ack_` names, these settings do not select a DM or enable
 a recipient acknowledgment. Increasing attempt limits or shortening delays raises
 radio traffic and battery use. The configured local attempt limits bound work;
 they are not a promise of elapsed delivery time under a stalled main loop.
-Text remains limited to 160 UTF-8 bytes including node name and the location suffix;
-oversize text fails visibly rather than being truncated.
+Each channel message remains limited to 160 UTF-8 bytes including node name and
+location. Automatic warnings split as described below if the combined text does
+not fit. If an individual part still cannot fit, the entire event fails visibly;
+no partial event or truncated UTF-8 is sent. Each part has its own bounded retry
+budget. Even after a first-part failure, the second part is attempted;
+`part_failed=1` preserves the failed outcome until the next response event.
+
+## Post-fall response directives
+
+The initial `Possible fall` message and the detection thresholds remain unchanged.
+`FallResponse::updateButton()` runs before `updateDeadline()`, so a gesture already
+confirmed by debounce wins a deadline reached in the same loop. A third release
+whose debounce finishes after the deadline produces a late confirmation.
+
+| Condition | Message | SOS |
+| --- | --- | --- |
+| Three accepted presses before escalation | Existing `ack_message` with GPS or fallback location | Stop immediately |
+| No accepted response at 30 seconds; moving or unknown | Assistance+location, then ` | USER COULD NOT CONFIRM THEIR CONDITION` | Keep repeating |
+| No accepted response at 30 seconds; final continuous quiet window satisfied | Assistance+location, then ` | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER` | Keep repeating |
+| Three accepted presses after either automatic warning | Independent `USER HAS CONFIRMED FALL` (normal sender prefix, no location suffix) | Stop immediately |
+
+Only one automatic warning is selected per incident. Motion resuming afterward
+does not send a retraction or stop SOS. Sending, hearing a repeat, and exhausting
+retries do not close the incident. Three presses remain available without a time
+limit while the powered firmware is running. Reboot and shutdown clear volatile
+state. The existing SOS pattern, including its five-second pause, remains intact.
+
+Quiet requires fresh finite samples near 1 g, low gyro magnitude, and limited
+acceleration-vector change from a fixed quiet baseline. Movement, invalid readings,
+or a gap exceeding the configured maximum restart evidence collection. Cached
+readings do not extend evidence. Samples after the fixed deadline cannot strengthen
+the warning retroactively; a long service stall selects the general warning.
+These are initial engineering thresholds, not physically validated measures of
+incapacitation. Test worn-device motion and buzzer vibration before relying on them.
+
+For long names plus GPS coordinates, a no-movement warning may exceed 160 bytes.
+The formatter preserves all text using two ordinary channel messages:
+
+```text
+Node name: [1/2] NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER
+Node name: [2/2] Fall Detected & User Has Requested Assistance | lat=-90.000000, lon=-180.000000
+```
+
+The warning is first so location delivery does not precede the essential warning.
+Parts are independently retried; receiving one does not prove the other arrived.
+Standalone text never starts with ` | `; `FallNoticeMessage::join()` adds that
+separator only between two nonempty strings.
+
+A late confirmation supersedes its own automatic warning's queued packet, unsent
+parts and remaining retries. A packet already handed to the radio finishes normally.
+Its late callbacks and echoes cannot complete or fail the replacement confirmation.
+The separate initial `Possible fall` alert keeps its existing delivery lifecycle.
+
+### Adding another directive
+
+1. Add its plain text and any tunables to `HealthNodeConfig.h`, with units and guards.
+2. Add a named `FallNotice` and its text mapping in `FallNotice.h`; classify it in
+   `isAutomaticWarning()` if it follows the automatic-warning formatting/lifecycle.
+3. Add its condition in the focused response methods in `FallResponse.h`. Keep
+   user confirmation first, then specific warnings, then the general fallback.
+4. Add observable-behavior tests to `test_post_fall`; update this condition table.
+   Run `verify.ps1`. New kinds of delivery or extra message parts require an explicit
+   formatter/outbox change, rather than hidden side effects in a condition.
 
 `FallDetectionConfig::max_sample_gap_ms` in `MotionRule.h` remains 100 ms, with
 nominal sampling every 20 ms. `MotionHealth` uses that same threshold to count
@@ -108,7 +180,7 @@ cannot recover motion that was never sampled.
 ## Code ownership and review points
 
 - `AssistanceDelivery` owns frozen payloads, attempt fingerprints, deadlines,
-  counters, public-delivery states, and terminal reasons. `begin()` does not
+  counters, channel-delivery states, and terminal reasons. `begin()` does not
   reset a busy event; `poll()` performs at most one enqueue attempt per call.
 - `FallAckSender::queueGroup()` uses the existing channel encryption and group
   text wire format. It sets local tracking metadata and asks Mesh to flood.
@@ -122,43 +194,34 @@ cannot recover motion that was never sampled.
 - `MyMesh::onPacketTxComplete()` routes completion to both controllers; only the
   matching tag acts. `filterRecvFloodPacket()` observes echoes before normal
   Mesh deduplication and returns control to existing validation/forwarding.
-- `FallResponse::messageCompleted()` releases the assistance-pending latch only
-  at a terminal delivery outcome. Existing SOS and triple-click policy remains.
-  Other SensorMesh alert uses, such as battery contact alerts, are separate from
-  these two public fall-message streams.
+- `FallResponse::messageAccepted()` releases a request only when the outbox owns
+  it. An older delivery completion cannot erase a new confirmation. `FallNoticeOutbox`
+  owns bounded pending capacity and multipart progression; `AssistanceDelivery::supersede()`
+  retires old tags/hashes before queued cancellation can invoke a callback.
+  Normal companion messaging continues alongside the two fall-message streams.
 - `MotionHealth` observes every sensor poll without changing the driver or
-  detector. `main.cpp` prints fault/recovery transitions and exposes `health`.
+  detector. `HealthMonitor.cpp` prints fault/recovery transitions and exposes `health`.
   No new interrupt/FIFO sampling path or general blocking-I/O rewrite is included.
-- `platformio.ini` adds `native_delivery` with production Mesh and Crypto sources
+- `platformio.ini` defines `native_delivery` with production Mesh and Crypto sources
   and the small `test/transport_support` host adapters. It excludes the ordinary
   suite's crypto mocks. `verify.ps1` runs both `native` and `native_delivery` so
   the transport integration suite cannot be omitted from full verification.
 
 Use serial at 115200 baud and enter `health` followed by carriage return. It reports
-`fall=...; help=...; motion=...; max_gap_ms=...; gaps=...`. `monitoring` means no
+`fall=...; help=...; motion=...; max_gap_ms=...; gaps=...; part_failed=...`. `help`
+describes the current response part; `part_failed` retains a prior part failure.
+`monitoring` means no
 prolonged sample outage is currently latched; it is not proof that the rule is armed
 or that a person has not fallen. `motion` continues to show sensor measurements.
 
 ## Validation and further changes
 
-Verified in the primary workspace on **2026-09-30** using `verify.ps1`:
+Run `.\verify.ps1` to build the combined BLE companion and fall-detection image,
+merge its flash image, and run both native suites. Verification commands and boundaries are described
+in [build validation](build-validation.md). The transport tests cover production
+Mesh/crypto with fake radio and clock boundaries; they do not execute BLE hardware.
 
-| Check | Result |
-| --- | --- |
-| `heltec_v4_sensor` firmware and merged image | Passed; RAM 59,276 bytes, flash 1,179,681 bytes |
-| `heltec_v4_companion_radio_ble` firmware and merged image | Passed; RAM 171,456 bytes, flash 1,264,413 bytes |
-| `native`: existing scenarios, dispatcher and motion-health suites | 190/190 passed |
-| `native_delivery`: production Mesh/crypto/channel integration | 22/22 passed |
-| Total software tests | **212/212 passed** |
-
-The local verification log is `.pio/message-delivery-verification.log` (ignored
-build output). The 45 added cases comprise 18 dispatcher, 5 motion-health, and
-22 transport integration cases. Earlier allocation-only tests were migrated to
-the new delivery owner while preserving their sensor/SOS fault scenarios.
-The OLED/UI files have no changes. No firmware was flashed or code pushed.
-
-Run `.\verify.ps1` from the project root to build both firmware images, merge their
-flash images, and execute all native suites. Focused tests are:
+Focused tests are:
 
 ```powershell
 python -m platformio test -e native -f test_dispatcher_delivery
@@ -176,7 +239,7 @@ Synthetic tests and firmware builds do not establish RF range, actual reception,
 human acknowledgment, sensor sensitivity, watchdog behavior, or physical timing.
 Bench verification requires the sensor, a repeater, and a receiving companion:
 interrupt the radio path, restore it within and after the retry budgets, and
-compare serial state with received public text and duplicates. Measure sampling
+compare serial state with received channel text and duplicates. Measure sampling
 gaps under sustained radio/GPS/flash activity. No hardware is flashed by these tests.
 
 To adjust behavior, first change the documented constants, rerun the focused
@@ -185,5 +248,5 @@ the state contract, update its native tests and this directive map together.
 For rollback, preserve a Git snapshot of the whole delivery change and restore
 the controller, integration, packet metadata, dispatcher, tests, and documentation
 as a coherent set. Removing only the completion hook can strand pending requests.
-Reboot still clears all delivery, SOS, partial-click, and detector state; no flash
-persistence, automatic retry after reboot, or new manual resend command is added.
+Reboot still clears all delivery, SOS, partial-click, and detector state; delivery events are not persisted, retried after reboot, or exposed through a manual
+resend command. The selected channel is persisted separately by `FallChannelStore`.

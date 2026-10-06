@@ -1,6 +1,104 @@
 # CLI Commands
 
-This document provides an overview of CLI commands that can be sent to MeshCore Repeaters, Room Servers and Sensors.
+The local SeniorHealthNode BLE companion supports the fall-channel commands below
+through USB serial and the companion custom-variable protocol over BLE. Its
+`motion`, `health` and `beep` diagnostics remain USB-only. The upstream remote-node
+reference later in this document does not make its admin, OTA or ACL commands
+local SeniorHealthNode commands.
+
+## Local USB diagnostics
+
+Open the board's serial port at **115200 baud**. CR, LF and CRLF terminate a
+command. These commands remain available while BLE companion services run:
+
+| Command | Result |
+| --- | --- |
+| `motion` | Latest valid acceleration axes in g, gyro axes in degrees/s and chip temperature in Celsius, or an MPU6050-unavailable reply. Chip temperature is not body temperature. |
+| `health` | `fall` and `help` delivery states, `motion` availability, `max_gap_ms`, `gaps` and `part_failed`. |
+| `beep` | Starts a 150 ms, 2000 Hz beep if the buzzer is available; reports unavailable during an active alarm sequence. |
+| `get fall.channel` | Describes the configured destination without returning its shared key. |
+| `set fall.channel ...` | Validates and saves the destination for new incidents; syntax below. |
+
+`help` is the current response-message part. `part_failed=1` preserves a failed
+part until the next response event. `motion=monitoring` means no prolonged data
+outage is latched; it does not mean the detector is armed or no fall occurred.
+A fresh-data outage of five seconds produces `motion=FAULT`. Gap counters track
+completed intervals between fresh valid samples, including an outage once data
+resumes. See the [delivery guide](message_delivery_changes.md).
+
+USB command input is bounded per loop and the firmware does not echo characters.
+A serial terminal can still enable its own local echo or logging. Overlong lines
+and lines containing NUL are discarded rather than executed as a truncated command.
+The diagnostics above are not BLE custom variables; `fall.channel` is.
+
+## Fall-message channel (USB and BLE)
+
+Connect MeshCore One **v1.5.1 or a compatible later version** to this node over
+BLE, open **Tools → CLI**, and select the **local** session (`session local`).
+These commands configure the connected companion; do not select a remote repeater
+session. The same commands work over USB serial at **115200 baud**, with CR, LF or
+CRLF line endings, while the BLE companion runs.
+
+```text
+get fall.channel
+set fall.channel public #falldetect
+set fall.channel public #careteam
+set fall.channel private CareGroup <shared-key>
+```
+
+Replace `<shared-key>` with the private channel's **16-byte key** in either
+32 hexadecimal characters or padded Base64. The firmware also accepts 32-byte
+keys (64 hex characters or padded Base64) for receivers that support them; use
+16-byte keys for normal MeshCore One channel setup. Enter an actual shared channel
+key, not a password. The firmware accepts single-token channel names of up to
+31 UTF-8 bytes. Names cannot contain whitespace, commas, colons, quotes or
+backslashes. Public names must start with `#`; their exact bytes, including `#`,
+are hashed with SHA-256 and the first 16 bytes select the channel.
+
+`get fall.channel` returns `public #name` or `private Name`, without the key.
+A successful set saves the selection automatically. The setting survives reboot
+and ordinary firmware updates that preserve the filesystem. After the initial
+firmware installation, no rebuild or reboot is needed to change it. Erasing the
+filesystem/factory resetting removes the selection and restores the compiled
+default, initially public `#falldetect`.
+
+Every new fall incident captures the selected channel. Its initial alert,
+automatic warnings, assistance request, late confirmation, multipart messages and
+retries keep that destination even if the configured channel is changed meanwhile.
+A later incident uses the new selection. Receiving nodes need the matching channel
+key and radio settings. Setting this destination does not add or overwrite entries
+in the companion's ordinary channel list; add the channel there separately if
+needed for normal client chat.
+
+MeshCore One translates these local commands to `CMD_GET_CUSTOM_VARS` (40) and
+`CMD_SET_CUSTOM_VAR` (41), with the field `fall.channel`. The write payload is
+`fall.channel:public #name` or `fall.channel:private Name <shared-key>`. Reads return
+`fall.channel:public #name` or `fall.channel:private Name`, alongside sensor settings.
+The firmware returns standard OK, illegal-argument or file-I/O-error responses.
+MeshCore One may label an invalid value as “unknown custom variable”; check the
+syntax and key length. It also displays entered commands in its terminal/history,
+so a private key typed there can appear in the app. Firmware replies and USB
+logging do not echo it.
+
+The implementation matches MeshCore One's published
+[v1.5.1 local command parser](https://github.com/Avi0n/MeshCoreOne/blob/v1.5.1/MC1/Views/Tools/CLI/CLILocalCommandParser.swift)
+and [executor](https://github.com/Avi0n/MeshCoreOne/blob/v1.5.1/MC1/Views/Tools/CLI/CLIToolViewModel%2BLocalCommands.swift).
+Source/protocol compatibility does not establish a physical iOS/BLE test.
+
+For manual code review: `health/FallChannel.h` parses and describes settings,
+`health/FallChannelStore.h` saves two alternating checksummed records (`/fall_ch0`
+and `/fall_ch1`), `HealthMonitor.cpp` shares the setter between USB and BLE, and
+`MyMesh.cpp` handles the companion custom-variable frames. A failed write keeps
+the previous valid record. If both existing records are invalid/unreadable, sending
+is disabled until a valid setting is saved; it never silently substitutes the
+public default for corrupt saved settings. Detection and the local alarm continue.
+Settings files contain the shared key and are not encrypted at rest.
+
+## Upstream remote-node command reference
+
+The remaining commands describe upstream remote/admin features. Their presence
+here does not enable a repeater or room-server target in SeniorHealthNode. Use the
+local command tables above for this BLE companion.
 
 ## Navigation
 
@@ -1023,16 +1121,19 @@ region save
 
 ### Sensors (When sensor support is compiled in)
 
-#### View fall-message delivery and motion health (SeniorHealthNode sensor)
+#### View fall-message delivery and motion health (SeniorHealthNode combined companion)
 
 **Usage:** `health`
 
-Available in `heltec_v4_sensor` with MPU6050 support. Over serial, use 115200 baud
+Available in `heltec_v4_companion_radio_ble` with MPU6050 support. Over serial, use 115200 baud
 and terminate the command with carriage return. The reply contains `fall`, `help`,
-`motion`, `max_gap_ms`, and `gaps`.
+`motion`, `max_gap_ms`, `gaps`, and `part_failed`.
 
-`fall` and `help` report the independent initial-fall and post-click public-channel
-events. States distinguish queueing, local transmission, repeater echo evidence,
+`fall` and `help` report the independent initial-fall and current response-message
+part. Responses include assistance, automatic warnings and late user confirmation.
+`part_failed=1` retains a failure in any part of the current or last completed
+response event, even if a later part succeeds; the next event resets it.
+States distinguish queueing, local transmission, repeater echo evidence,
 and exhausted/unconfirmed delivery. A repeater echo is not a recipient receipt.
 `motion=FAULT` means fresh valid samples have been absent for the configured
 timeout; `monitoring` is not a guarantee that the detector is armed. Gap statistics

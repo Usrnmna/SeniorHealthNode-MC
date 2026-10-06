@@ -1,5 +1,5 @@
 #pragma once
-#include "../../examples/simple_sensor/AssistanceDelivery.h"
+#include "../../examples/companion_radio/health/AssistanceDelivery.h"
 
 // State-machine-only fake. Real packets/radio failures are covered separately by
 // test_assistance_delivery using production Mesh/Dispatcher and actual Crypto.
@@ -8,7 +8,8 @@ struct AssistanceTestLink : AssistanceTransport {
   uint32_t tag = 0, timestamp = 0;
   uint8_t fingerprint[8] = {};
   uint32_t uniqueTimestamp() override { return ++timestamp; }
-  Result queueAssistance(const uint8_t*, unsigned, uint32_t t, uint8_t hash[8]) override {
+  void cancelAssistance(uint32_t) override {}
+  Result queueAssistance(const uint8_t*, unsigned, uint32_t t, uint8_t hash[8], const FallChannel& channel) override {
     tag = t; memcpy(fingerprint, &tag, sizeof(tag)); memcpy(hash, fingerprint, 8); return result;
   }
   void start(AssistanceDelivery& d, uint32_t now) {

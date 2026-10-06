@@ -1,6 +1,46 @@
 # Frequently Asked Questions
 
-A list of frequently-asked questions and answers for MeshCore
+## SeniorHealthNode
+
+**Do I need separate companion and sensor firmware?**
+One `heltec_v4_companion_radio_ble` image runs BLE, messaging and local motion
+monitoring on the same Heltec V4.3 OLED board. The external GY-521 supplies motion
+readings. `native` and `native_delivery` are host tests, not device firmware.
+
+**Does monitoring require a phone connection?**
+Motion detection, SOS and channel-message retries run locally without a connected
+phone. Recipients still need compatible listening nodes, matching radio/channel
+settings and a working radio path.
+
+**What does PRG do after an alarm?**
+Three short, debounced clicks within three seconds silence SOS. Before the
+30-second response deadline they request assistance with location; after automatic
+escalation they send `USER HAS CONFIRMED FALL`. Without a completed response,
+the node queues an automatic warning and keeps sounding. PRG is reserved for the
+alarm until acknowledgement; ordinary idle clicks are not a help request.
+
+**Can I use a private channel?**
+Yes. Use `set fall.channel private Name <shared-key>` over USB or a compatible
+BLE client's local CLI. The selection persists and applies to new incidents;
+ongoing incidents retain their captured channel. Configure receiving companions
+separately with the matching key. See [channel setup](cli_commands.md#fall-message-channel-usb-and-ble).
+
+**Does a repeater echo mean someone received my alert?**
+It records a matching rebroadcast, not delivery to a particular companion or
+person. Retries can produce duplicate text. Pending alarms and messages are
+volatile and clear on reboot; saved channel settings persist.
+
+**Where are setup and troubleshooting instructions?**
+Start with the [README](../README.md#getting-started), [sensor guide](gy521_sensor.md),
+[USB diagnostics](cli_commands.md#local-usb-diagnostics) and
+[build checks](build-validation.md). This is an experimental possible-fall detector;
+software tests do not establish physical detection accuracy or emergency delivery.
+
+## Upstream MeshCore background
+
+The reference below describes the wider MeshCore ecosystem, including other
+boards, repeaters and room servers. Those roles are not additional firmware
+targets in this SeniorHealthNode repository.
 
 - [Frequently Asked Questions](#frequently-asked-questions)
 - [1. Introduction](#1-introduction)

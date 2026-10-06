@@ -53,6 +53,7 @@ class UITask : public AbstractUITask {
   UIScreen* msg_preview;
   UIScreen* curr;
 
+  bool suppress_user_button = false;
   void userLedHandler();
 
   // Button action handlers
@@ -72,6 +73,7 @@ public:
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
+  void suppressUserButton(bool suppress) { suppress_user_button = suppress; }
   void gotoHomeScreen() { setCurrScreen(home); }
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }

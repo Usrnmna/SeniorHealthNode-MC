@@ -1,14 +1,14 @@
 #include <AssistanceTestLink.h>
 #include <gtest/gtest.h>
-#define ESP32 // Exercise the same local-buffer HAL branch as the sensor firmware.
+#define ESP32 // Exercise the same local-buffer HAL branch as the combined firmware.
 #include <helpers/sensors/MPU6050.h>
 #include <helpers/sensors/BoundedAHT.h>
 #include <helpers/sensors/TelemetrySnapshot.h>
 #include <helpers/StagedBatteryRead.h>
 #include <helpers/sensors/EnvironmentTelemetry.h>
 #include <helpers/ui/OledFrameTransfer.h>
-#include "../../examples/simple_sensor/MotionRule.h"
-#include "../../examples/simple_sensor/FallResponse.h"
+#include "../../examples/companion_radio/health/MotionRule.h"
+#include "../../examples/companion_radio/health/FallResponse.h"
 
 static std::vector<uint8_t> mpuResponse(uint8_t reg, uint8_t count) {
   if (reg == 0x75) return {0x68};
@@ -140,7 +140,7 @@ TEST(SensorTiming, NewFallAndAcknowledgmentDoNotResetOlderMessageRetryBudget) {
   for (unsigned i=1;i<HealthNodeConfig::ack_max_attempts;++i)
     delivery.poll(700 + 5000*i, link);
   EXPECT_EQ(delivery.state(), AssistanceDelivery::Failed);
-  response.messageCompleted();
+  response.messageAccepted();
   EXPECT_FALSE(response.messagePending());
 }
 

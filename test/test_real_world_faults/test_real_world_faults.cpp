@@ -6,10 +6,10 @@
 #include <helpers/ui/BuzzerPattern.h>
 #include <helpers/ui/OledFrameTransfer.h>
 #include <helpers/StagedBatteryRead.h>
-#include "../../examples/simple_sensor/MotionRule.h"
-#include "../../examples/simple_sensor/FallResponse.h"
-#include "../../examples/simple_sensor/LowBatteryAlert.h"
-#include "../../examples/simple_sensor/FallAckMessage.h"
+#include "../../examples/companion_radio/health/MotionRule.h"
+#include "../../examples/companion_radio/health/FallResponse.h"
+#include "../../examples/companion_radio/health/LowBatteryAlert.h"
+#include "../../examples/companion_radio/health/FallAckMessage.h"
 #include <array>
 #include <string>
 
@@ -198,13 +198,13 @@ TEST_P(RetryRecovery, AllocationRecoversOnceWithoutRestartingSos) {
   FaultRig r(UINT32_MAX - 4000); r.quiet(120); r.fall(); r.acknowledge();
   ASSERT_TRUE(r.response.messagePending());
   AssistanceDelivery delivery; AssistanceTestLink link; link.start(delivery, r.now);
+  r.response.messageAccepted(); // Delivery now owns retries independently of response state.
   for (unsigned attempt = 0; attempt <= GetParam(); ++attempt) {
     link.result = attempt == GetParam() ? AssistanceTransport::Queued : AssistanceTransport::NoPacket;
     delivery.poll(r.now, link);
     if (attempt == GetParam()) {
       delivery.txComplete(r.now, link.tag, true);
       EXPECT_TRUE(delivery.confirmRepeat(link.fingerprint));
-      r.response.messageCompleted();
     }
     EXPECT_FALSE(r.buzzer.alarmActive());
     r.tick(HealthNodeConfig::ack_retry_ms - 1);
@@ -225,7 +225,7 @@ TEST(RealWorldFaults, RetryExhaustionDoesNotBlockLaterDetectionOrAcknowledgment)
     r.quiet(250); // Motion continues during the five-second retry interval.
   }
   EXPECT_EQ(delivery.state(), AssistanceDelivery::Failed);
-  r.response.messageCompleted(); EXPECT_FALSE(r.response.messagePending());
+  r.response.messageAccepted(); EXPECT_FALSE(r.response.messagePending());
   r.fall(); EXPECT_EQ(r.falls, 2u); EXPECT_TRUE(r.buzzer.alarmActive());
   r.acknowledge(); EXPECT_TRUE(r.response.messagePending());
 }

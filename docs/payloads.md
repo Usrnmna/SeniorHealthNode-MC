@@ -1,5 +1,11 @@
 # Payload Format
 
+SeniorHealthNode sends initial fall alerts, assistance, automatic warnings and
+late confirmations as ordinary group text on the selected public or private
+channel. Multipart warnings are separate ordinary messages with `[1/2]` and
+`[2/2]` text labels. No health-specific payload type is added. See
+[response text and delivery](message_delivery_changes.md#post-fall-response-directives).
+
 Inside each [MeshCore Packet](./packet_format.md) is a payload, identified by the payload type in the packet header. The types of payloads are:
 
 * Node advertisement.

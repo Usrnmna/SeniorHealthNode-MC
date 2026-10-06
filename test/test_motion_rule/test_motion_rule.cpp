@@ -7,7 +7,7 @@
 #else
 #include <gtest/gtest.h>
 #endif
-#include "../../examples/simple_sensor/MotionRule.h"
+#include "../../examples/companion_radio/health/MotionRule.h"
 
 // Synthetic 50 Hz recordings test logic, NOT accuracy on real falls or wearers.
 struct Recording {

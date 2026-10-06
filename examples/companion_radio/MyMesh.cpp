@@ -1,3 +1,8 @@
+#if ENV_INCLUDE_MPU6050
+#include "health/FallAckSender.h"
+#include "health/FallChannelStore.h"
+#include <initializer_list>
+#endif
 #include "MyMesh.h"
 
 #include <Arduino.h> // needed for PlatformIO
@@ -477,6 +482,13 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
+#if ENV_INCLUDE_MPU6050
+    // Observe repeat evidence BEFORE Mesh's seen-packet table discards our echo.
+    for (auto* delivery : {&fall_delivery, &assistance}) {
+      if (FallAckSender::observeRepeat(*packet, *delivery) && delivery->queuedTag())
+        cancelQueuedPacket(delivery->queuedTag()); // No duplicate queued retry after confirmation.
+    }
+#endif
   // REVISIT: try to determine which Region (from transport_codes[1]) that Sender is indicating for replies/responses
   //    if unknown, fallback to finding Region from transport_codes[0], the 'scope' used by Sender
   return false;
@@ -653,6 +665,9 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
 
     if (permissions & TELEM_PERM_BASE) { // only respond if base permission bit is set
       telemetry.reset();
+      #if ENV_INCLUDE_MPU6050
+      if (board.batteryReadingReady())
+      #endif
       telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
       // query other sensors -- target specific
       sensors.querySensors(permissions, telemetry);
@@ -865,6 +880,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui), _iter(0) {
   _iter_started = false;
   _cli_rescue = false;
+  cli_command[0] = 0;
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -932,6 +948,10 @@ void MyMesh::begin(bool has_display) {
 
   // load persisted prefs
   _store->loadPrefs(_prefs);
+#if ENV_INCLUDE_MPU6050
+  if (!FallChannelStore::load(*_store->getPrimaryFS(), fall_channel))
+    Serial.println("Fall channel settings invalid; use set fall.channel before sending alerts");
+#endif
   sensors.node_lat = _prefs.node_lat;
   sensors.node_lon = _prefs.node_lon;
 
@@ -1646,6 +1666,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_SEND_TELEMETRY_REQ && len == 4) {  // 'self' telemetry request
     telemetry.reset();
+    #if ENV_INCLUDE_MPU6050
+    if (board.batteryReadingReady())
+    #endif
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
     float temperature = board.getMCUTemperature();
     if(!isnan(temperature)) { // Supported boards with built-in temperature sensor. ESP32-C3 may return NAN
@@ -1800,23 +1823,47 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS) {
     out_frame[0] = RESP_CODE_CUSTOM_VARS;
     char *dp = (char *)&out_frame[1];
-    for (int i = 0; i < sensors.getNumSettings() && dp - (char *)&out_frame[1] < 140; i++) {
-      if (i > 0) {
-        *dp++ = ',';
-      }
-      strcpy(dp, sensors.getSettingName(i));
-      dp = strchr(dp, 0);
-      *dp++ = ':';
-      strcpy(dp, sensors.getSettingValue(i));
-      dp = strchr(dp, 0);
+    // MeshCore One's local CLI resolves get/set fall.channel through these
+    // standard custom-variable frames. Enumerate it first and never export keys.
+    auto append = [&](const char* name, const char* value) {
+      const bool comma = dp != (char *)&out_frame[1];
+      const size_t size = strlen(name) + 1 + strlen(value) + unsigned(comma);
+      if (size_t(dp - (char *)out_frame) + size > MAX_FRAME_SIZE) return false;
+      if (comma) *dp++ = ',';
+      strcpy(dp, name); dp += strlen(name); *dp++ = ':';
+      strcpy(dp, value); dp += strlen(value);
+      return true;
+    };
+#if ENV_INCLUDE_MPU6050
+    char channel_description[80];
+    fall_channel.describe(channel_description, sizeof(channel_description));
+    append("fall.channel", channel_description);
+#endif
+    for (int i = 0; i < sensors.getNumSettings(); i++) {
+      if (!append(sensors.getSettingName(i), sensors.getSettingValue(i))) break;
     }
     _serial->writeFrame(out_frame, dp - (char *)out_frame);
   } else if (cmd_frame[0] == CMD_SET_CUSTOM_VAR && len >= 4) {
+    // Accept an optional final NUL, but never execute a truncated prefix of a
+    // malformed frame containing an embedded NUL or trailing hidden command.
+    const size_t text_len = cmd_frame[len - 1] == 0 ? len - 2 : len - 1;
+    if (memchr(cmd_frame + 1, 0, text_len)) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      return;
+    }
     cmd_frame[len] = 0;
     char *sp = (char *)&cmd_frame[1];
     char *np = strchr(sp, ':'); // look for separator char
     if (np) {
       *np++ = 0; // modify 'cmd_frame', replace ':' with null
+#if ENV_INCLUDE_MPU6050
+      if (strcmp(sp, "fall.channel") == 0) {
+        const auto result = setFallChannel(np);
+        if (result == 0) writeOKFrame();
+        else writeErrFrame(result == 1 ? ERR_CODE_ILLEGAL_ARG : ERR_CODE_FILE_IO_ERROR);
+        return;
+      }
+#endif
       bool success = sensors.setSettingValue(sp, np);
       if (success) {
         #if ENV_INCLUDE_GPS == 1
@@ -2020,34 +2067,57 @@ void MyMesh::saveContacts() {
 void MyMesh::enterCLIRescue() {
   _cli_rescue = true;
   cli_command[0] = 0;
+  cli_overflow = false;
   Serial.println("========= CLI Rescue =========");
 }
 
-void MyMesh::checkCLIRescueCmd() {
+void MyMesh::checkCLIRescueCmd(bool health_only) {
   int len = strlen(cli_command);
-  while (Serial.available() && len < sizeof(cli_command)-1) {
-    char c = Serial.read();
-    if (c != '\n') {
-      cli_command[len++] = c;
-      cli_command[len] = 0;
+  unsigned serial_bytes = 0;
+#if ENV_INCLUDE_MPU6050
+  const unsigned serial_budget = HealthNodeConfig::serial_rx_bytes_per_loop;
+#else
+  const unsigned serial_budget = 16;
+#endif
+  // Keep parsing bounded per loop. Discard the whole line after overflow;
+  // never execute a truncated key or interpret its tail as another command.
+  while (Serial.available() && serial_bytes++ < serial_budget) {
+    const char c = Serial.read();
+    if (c == '\n' && len == 0 && !cli_overflow) continue; // CRLF's trailing LF.
+    if (c == '\r' || c == '\n') {
+      if (cli_overflow) {
+        Serial.println("Error: command too long or contains invalid bytes");
+        cli_command[0] = 0; cli_overflow = false;
+        return;
+      }
+      cli_command[len++] = '\r'; cli_command[len] = 0;
+      break;
     }
-    Serial.print(c);  // echo
-  }
-  if (len == sizeof(cli_command)-1) {  // command buffer full
-    cli_command[sizeof(cli_command)-1] = '\r';
+    if (cli_overflow) continue;
+    if (c == 0 || len >= sizeof(cli_command) - 2) { cli_overflow = true; continue; }
+    cli_command[len++] = c; cli_command[len] = 0;
+    // No local echo: a private key must not be copied into USB diagnostics.
   }
 
   if (len > 0 && cli_command[len - 1] == '\r') {  // received complete line
     cli_command[len - 1] = 0;  // replace newline with C string null terminator
 
-    if (memcmp(cli_command, "set ", 4) == 0) {
+#if ENV_INCLUDE_MPU6050
+    char reply[160];
+    if (handleHealthCommand(cli_command, reply)) {
+      Serial.println(reply);
+    } else
+#endif
+    if (health_only) {
+      Serial.println("Commands: health, motion, beep, get/set fall.channel");
+    } else if (memcmp(cli_command, "set ", 4) == 0) {
       const char* config = &cli_command[4];
       if (memcmp(config, "pin ", 4) == 0) {
         _prefs.ble_pin = atoi(&config[4]);
         savePrefs();
         Serial.printf("  > pin is now %06d\n", _prefs.ble_pin);
       } else {
-        Serial.printf("  Error: unknown config: %s\n", config);
+        Serial.println("  Error: unknown config"); // Never echo a mistyped private-key command.
       }
     } else if (strcmp(cli_command, "rebuild") == 0) {
       bool success = _store->formatFileSystem();
@@ -2229,6 +2299,9 @@ void MyMesh::loop() {
     checkCLIRescueCmd();
   } else {
     checkSerialInterface();
+#if ENV_INCLUDE_MPU6050 && !defined(ENABLE_USB_INTERFACE)
+    checkCLIRescueCmd(true); // USB serial diagnostics coexist with the BLE protocol.
+#endif
   }
 
   // is there are pending dirty contacts write needed?

@@ -1,14 +1,30 @@
 # Security Policy
 
-## Supported Versions
+## Project scope
 
-Security fixes are applied to the latest release only. We do not backport
-fixes to older versions.
+This repository contains the combined SeniorHealthNode BLE companion firmware,
+`heltec_v4_companion_radio_ble`. Include the exact source revision when reporting
+an issue; an upstream MeshCore version label alone does not identify this fork's
+health-monitoring and channel-setting code.
 
-| Version | Supported |
-|---------|-----------|
-| 1.15+ | ✅ |
-| <1.15 | ❌ |
+## Fall-channel data
+
+The compiled fall destination is public `#falldetect`. Its hashtag-derived key
+is reproducible from the channel name and is not a private recipient secret.
+A private destination requires a shared key configured on sending and receiving
+nodes. Messages can contain the node name, assistance text and GPS coordinates
+or the configured fallback location.
+
+Saved channel records contain the shared key without at-rest encryption. Firmware
+reads/replies omit the key and USB input has no firmware echo, but a client can
+retain typed commands in its history. Existing incidents keep their original
+channel after a setting change. Corrupt existing records disable fall sending
+until a valid setting is saved; absent records use the compiled default. Local
+detection and SOS remain available when the channel is invalid.
+
+A matching repeater echo is not authenticated recipient or human acknowledgement.
+See [channel setup](docs/cli_commands.md#fall-message-channel-usb-and-ble) and
+[delivery evidence](docs/message_delivery_changes.md) for exact behavior.
 
 ## Reporting a Vulnerability
 

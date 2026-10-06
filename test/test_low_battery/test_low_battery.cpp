@@ -8,7 +8,7 @@
 #include <gtest/gtest.h>
 #endif
 #include <helpers/ui/BuzzerPattern.h>
-#include "../../examples/simple_sensor/LowBatteryAlert.h"
+#include "../../examples/companion_radio/health/LowBatteryAlert.h"
 
 TEST(LowBattery, ThresholdAndTenMinuteRepeat) {
   LowBatteryAlert alert;

@@ -1,5 +1,9 @@
 # Number Allocations
 
+SeniorHealthNode fall messages use the existing group-text payload, not a new
+group-data application identifier. The `fall.channel` setting uses existing
+companion custom-variable commands; see the [protocol extension](companion_protocol.md#seniorhealthnode-extension).
+
 This document lists unique numbers/identifiers used in various MeshCore protocol payloads.
 
 # Group Data Types

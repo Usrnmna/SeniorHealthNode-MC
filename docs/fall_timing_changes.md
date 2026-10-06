@@ -1,9 +1,9 @@
 # Fall-detection timing implementation
 
-Scope: the five requested fixes in `heltec_v4_sensor`. CAD and radio code are
-unchanged. The BLE companion retains its existing synchronous environmental,
-display, and battery behavior. Fall thresholds, confirmation time, two-second
-quiet rearm, and 60-second cooldown are unchanged.
+The `heltec_v4_companion_radio_ble` firmware combines BLE and health monitoring.
+Environmental collection runs in the background; OLED and battery acquisition
+are serviced in small steps. Fall thresholds, confirmation time, two-second
+quiet rearm, and 60-second cooldown are preserved.
 
 ## 1. Environmental conversions and telemetry requests
 
@@ -50,23 +50,27 @@ bytes; the collector has a configured 6,144-byte task stack, plus RTOS overhead.
   avoiding races on `Wire1`'s shared receive buffer. Individual transactions
   use a 5 ms timeout; conversion waits do not own the bus.
 
-A brief fault no longer automatically pauses hardware reads for five seconds.
+A brief read fault uses the short retry interval; failed initialization uses the five-second backoff.
 Invalid data still clears detector evidence and requires quiet rearming.
 
 ## 3. Analysis independent of notifications
 
-[`main.cpp`](../examples/simple_sensor/main.cpp), `MyMesh::pollMotion()`, gates
+[`HealthMonitor.cpp`](../examples/companion_radio/HealthMonitor.cpp), `MyMesh::pollMotion()`, gates
 analysis on sample validity/freshness rather than alarm or message state. It
-services motion at loop entry and again after radio work. An outstanding public
+services motion at loop entry and again after radio work. An outstanding
 channel alert is retained, and new detections log that their notification was
 coalesced. The [message delivery guide](message_delivery_changes.md) describes
 current channel retries, repeater-echo confirmation, and serial health diagnostics.
 
-[`FallResponse.h`](../examples/simple_sensor/FallResponse.h), `onFall()`, reports
+[`FallResponse.h`](../examples/companion_radio/health/FallResponse.h), `onFall()`, reports
 whether a new SOS must start. An active SOS keeps its existing click progress.
-`updateButton()` coalesces an acknowledgment into an already-pending assistance
-message without extending its retry budget. If a later detection occurs after
-the earlier SOS stopped, it starts a new local SOS even with an old send pending.
+`updateButton()` requests assistance before escalation or a standalone confirmation
+afterward. `updateDeadline()` selects one automatic warning at 30 seconds using
+independent residual-movement evidence. Neither duplicate detections nor partial
+clicks extend that deadline. `FallNoticeOutbox` retains accepted messages and gives
+late confirmation priority over the same incident's automatic-warning retries.
+If a later detection occurs after the earlier SOS stopped, it starts a new local
+SOS even with an old send pending. See the [response directives](message_delivery_changes.md#post-fall-response-directives).
 
 ## 4. OLED transfers
 
@@ -79,7 +83,7 @@ the earlier SOS stopped, it starts a new local SOS even with an old send pending
   completion and cancellation without allocating another framebuffer.
 - [`DisplayDriver.h`](../src/helpers/ui/DisplayDriver.h) supplies optional
   `service()`/`framePending()` hooks with no-op defaults.
-- [`UITask.cpp`](../examples/simple_sensor/UITask.cpp), `loop()`, services one
+- [`UITask.cpp`](../examples/companion_radio/ui-new/UITask.cpp), `loop()`, services one
   piece per pass and does not redraw over a frame still being sent.
 
 A healthy data piece takes about 0.8 ms of bus time at 400 kHz, plus addressing
@@ -94,9 +98,7 @@ loop call until eight samples are averaged. Start the next acquisition one secon
 after completion. `getBattMilliVolts()` returns the cache without hardware I/O.
 
 `MyMesh::pollLowBattery()` advances acquisition and waits for its first valid
-reading. [`SensorMesh.cpp`](../examples/simple_sensor/SensorMesh.cpp),
-`handleRequest()` and `loop()`, omit startup voltage until it exists;
-`onSensorDataRead()` also avoids treating startup as a depleted battery.
+reading. The companion UI and telemetry consume the same cached voltage.
 Existing thresholds, warning tones and fall-SOS priority remain intact.
 
 ## Configuration and validation
@@ -112,15 +114,10 @@ averaging, detection during SOS, acknowledgment retry coalescing, and OLED chunk
 coverage/fault cancellation. Supporting fakes are in `test/mocks/Wire.h`,
 `esp32-hal-i2c.h`, and `CayenneLPP.h`.
 
-Final verification: `verify.ps1` passed both `heltec_v4_sensor` and
-`heltec_v4_companion_radio_ble` builds, generated both merged firmware images,
-and passed all **81 native test cases**, including **11 new timing/fault tests**.
-The sandbox initially blocked native executable launch with Windows `WinError 5`;
-the complete verification then passed with execution permission. The log is
-`.pio/fall-timing-verify.log`. CAD/radio sources and `MotionRule.h` were also
-compared with the pre-edit snapshot and are unchanged.
+Reproducible combined-firmware checks are described in [build validation](build-validation.md).
+The timing and fault suites run through `verify.ps1`.
 
-No firmware was flashed. Host tests use simulated transactions and time, not a
+Host tests use simulated transactions and time, not a
 real MPU, display, radio, ADC or RTOS scheduler; they do not establish device
 timing or fall accuracy.
 
@@ -131,4 +128,5 @@ OLED on/off, telemetry traffic and transient I2C faults. Verify alarm/button
 behavior during pending sends, voltage accuracy, and collector stack headroom.
 Motion remains cooperative with radio, serial, flash and GPS work; these changes
 do not guarantee a hard 20 ms deadline. FIFO/interrupt sampling is not implemented.
-CAD behavior remains exactly as before this change.
+Radio CAD and airtime limits can delay queued messages; queue deadlines and retries
+are described in the [delivery guide](message_delivery_changes.md).
