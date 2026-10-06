@@ -2,12 +2,12 @@
 
 These tests run locally without uploading firmware. They exercise production
 MPU6050, motion, alarm, battery, button, ADC, display-transfer, and message-encoding
-classes with deterministic inputs. The original fault harness follows the glue in
-examples/simple_sensor/main.cpp; it does not compile or execute MyMesh itself.
-Additional delivery tests now exercise the production public packet builder,
+classes with deterministic inputs. The sensor fault harness follows the glue in
+examples/companion_radio/HealthMonitor.cpp; it does not compile or execute MyMesh itself.
+Delivery tests also exercise the production group-text packet builder,
 Mesh/Dispatcher, encryption, packet pool, and delivery controller with fake radio
 and clock boundaries. See [message-delivery changes](message_delivery_changes.md)
-for the directive-to-code map, public-channel contract, and adjustable limits.
+for the directive-to-code map, channel contract, and adjustable limits.
 
 ## Commands
 
@@ -58,12 +58,10 @@ python -m platformio test -e native -f test_real_world_faults
 | Truncated AHT measurements (6 cases) | Return each length 0–5 instead of 6 bytes | Fail measurement; reject restart until reinitialized; then recover |
 | UTF-8 / buffer bounds | Oversize multibyte message; valid message with extreme coordinates | Reject oversize without changing destination; preserve surrounding guard bytes |
 
-Parameterized values count as individual GoogleTest cases: 19 standalone scenarios
-plus 67 parameterized cases = **86 added cases**, across 26 scenario definitions.
-The original 81 cases remain included: **167 cases before the delivery and
-motion-health additions described below**.
+Parameterized scenarios expand into individual GoogleTest cases. Use the test
+runner output for totals for the current checkout.
 
-## Delivery and motion-health regression additions
+## Delivery and motion-health regressions
 
 ```powershell
 python -m platformio test -e native -f test_dispatcher_delivery
@@ -73,36 +71,51 @@ python -m platformio test -e native -f test_motion_health
 
 These suites cover local TX-start failure and timeout recovery, bounded packet
 allocation retries, queue expiry under CAD or airtime restrictions, independent
-public fall/assistance streams, packet callback ownership, repeat matching,
+fall/response streams, packet callback ownership, repeat matching,
 motion progressing during radio failure, and stale-sample health reporting.
-They use the production transport path. State-only retry scenarios in the older
-fault harness now inject allocation results into `AssistanceDelivery`;
-`FallResponse` retains the button/alarm/request latch without a second retry budget. Retries use fresh timestamps, so repeated public text
+They use the production transport path. State-only retry scenarios in the sensor
+fault harness inject allocation results into `AssistanceDelivery`;
+`FallResponse` retains the button/alarm/request latch without a second retry budget. Retries use fresh timestamps, so repeated channel text
 can be displayed more than once; recipient-level exactly-once delivery is not
 asserted. A matching repeater echo does not prove human or caregiver reception.
 
-Full verification in the primary workspace on **2026-09-30** passed both firmware
-builds and merged images, **190/190 native cases**, and **22/22 production transport
-cases**: **212/212 total**. The local log is `.pio/message-delivery-verification.log`.
-The dated results below describe the earlier baseline only.
+Reproducible combined-firmware checks are described in [build validation](build-validation.md).
+The deterministic fault suite and production transport suite are both included in
+`verify.ps1`. The harness does not execute the complete companion or BLE stack.
 
-## Verified local results — 2026-09-29
+## Post-fall escalation and late-confirmation regressions
 
-Verification ran in `C:\Users\usrnm\.codex\worktrees\cad7\SeniorHealthNode-MC`.
-The baseline completed before the new suite or mock changes were installed.
+`python -m platformio test -e native -f test_post_fall` runs the production response,
+residual-movement, formatting and outbox logic with synthetic time and inputs.
+It covers the fixed 30-second deadline, final continuous quiet period, missing and
+invalid samples, slow vector drift, late clicks after either warning, preserved SOS,
+rollover, UTF-8 boundaries, two-part warnings, reserved confirmation capacity, stale
+callbacks and exhausted retries. Tests also enforce the absence of a leading
+` | ` on standalone warning text.
 
-| Run | Observed result | Local log |
-| --- | --- | --- |
-| Original `verify.ps1` | Both firmware builds and merged images; 81/81 native cases passed | `.pio/baseline-verification.log` |
-| Focused new suite | 86/86 fault cases passed | `.pio/fault-tests.log` |
-| Expanded `verify.ps1` | Both firmware builds and merged images; 167/167 cases across nine suites passed | `.pio/expanded-verification.log` |
+The `native_delivery` suite additionally sends these payloads through production
+MeshCore encryption, queues and decryption. It checks actual queued cancellation
+and safe completion of an already-started warning before confirmation. Cipher
+padding and CAD backoff are handled by the test receiver/clock, not by firmware
+changes. These tests use fake radios and do not establish actual reception.
 
-The worktree lacked a local Python environment, so these runs used the explicit
-Python/compiler paths above. Initial sandbox package installation failed with
-Windows access denied; verification completed with execution permission. This
-was a tooling issue, not a failed firmware assertion. Logs and build products
-remain local under ignored `.pio`. Production firmware sources were not changed,
-and no firmware was uploaded.
+
+## Channel settings and companion-button regressions
+
+```powershell
+python -m platformio test -e native -f test_fall_channel
+python -m platformio test -e native -f test_companion_button
+```
+
+Channel tests cover public/private syntax, key formats, UTF-8 names, malformed
+values, saved-record recovery, failed writes and immutable incident/outbox channel
+snapshots. `native_delivery` checks hashtag key derivation and reception with a
+matching private key through production crypto. Storage fakes do not prove
+flash durability under physical power interruption.
+
+Companion-button tests cover suppression while the alarm owns PRG, clearing
+pending UI gestures and requiring release before ordinary UI input resumes.
+They do not operate the physical switch or display.
 
 ## What this establishes
 

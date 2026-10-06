@@ -1,5 +1,11 @@
 # QR Codes
 
+For SeniorHealthNode, channel sharing and the fall-message destination are
+separate settings. Adding a channel through a client or QR code does not change
+`fall.channel`. Use the [USB/BLE channel commands](cli_commands.md#fall-message-channel-usb-and-ble)
+to select the fall destination, and configure recipients with the matching channel
+key. The compiled destination is `#falldetect`, not the `Public` example below.
+
 This document provides an overview of QR Code formats that can be used for sharing MeshCore channels and contacts. The formats described below are supported by the MeshCore mobile app.
 
 ## Add Channel

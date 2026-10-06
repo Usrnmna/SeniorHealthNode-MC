@@ -1,6 +1,9 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include "MyMesh.h"
+#if ENV_INCLUDE_MPU6050
+#include <helpers/ui/AlarmBuzzer.h>
+#endif
 
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
@@ -241,14 +244,37 @@ void setup() {
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
 #endif
 
+#if ENV_INCLUDE_MPU6050
+  pinMode(PIN_USER_BTN, INPUT_PULLUP);
+  if (!alarm_buzzer.begin()) Serial.println("Buzzer PWM initialization failed");
+  if (HealthNodeConfig::charging_status_pin >= 0)
+    pinMode(HealthNodeConfig::charging_status_pin,
+            HealthNodeConfig::charging_status_active_low ? INPUT_PULLUP : INPUT_PULLDOWN);
+  Wire1.setTimeOut(HealthNodeConfig::sensor_i2c_timeout_ms);
+#endif
   board.onBootComplete();
 }
 
 void loop() {
+#if ENV_INCLUDE_MPU6050
+  the_mesh.pollMotion();
+  const bool alarm_owned_button = the_mesh.fallAlarmActive();
+  the_mesh.pollFallResponse();
+  the_mesh.pollLowBattery();
+#endif
   the_mesh.loop();
   interface_manager.loop();
+#if ENV_INCLUDE_MPU6050
+  the_mesh.pollMotion();
+  const bool alarm_after_radio = the_mesh.fallAlarmActive();
+  the_mesh.pollFallResponse();
+#endif
   sensors.loop();
 #ifdef DISPLAY_CLASS
+#if ENV_INCLUDE_MPU6050
+  // Alarm clicks must not also navigate, mute or shut down the companion UI.
+  ui_task.suppressUserButton(alarm_owned_button || alarm_after_radio || the_mesh.fallAlarmActive());
+#endif
   ui_task.loop();
 #endif
   rtc_clock.tick();

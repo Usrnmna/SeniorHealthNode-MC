@@ -160,6 +160,9 @@ class HomeScreen : public UIScreen {
     if (millis() > next_sensors_refresh) {
       sensors_lpp.reset();
       sensors_nb = 0;
+      #if ENV_INCLUDE_MPU6050
+      if (board.batteryReadingReady())
+      #endif
       sensors_lpp.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
       sensors.querySensors(0xFF, sensors_lpp);
       LPPReader reader (sensors_lpp.getBuffer(), sensors_lpp.getSize());
@@ -736,7 +739,7 @@ bool UITask::isButtonPressed() const {
 void UITask::loop() {
   char c = 0;
 #if UI_HAS_JOYSTICK
-  int ev = user_btn.check();
+  int ev = user_btn.check(false, suppress_user_button);
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_ENTER);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
@@ -759,7 +762,7 @@ void UITask::loop() {
     c = handleTripleClick(KEY_SELECT);
   }
 #elif defined(PIN_USER_BTN)
-  int ev = user_btn.check();
+  int ev = user_btn.check(false, suppress_user_button);
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
@@ -820,9 +823,10 @@ void UITask::loop() {
 #endif
 
   if (curr) curr->poll();
+  if (_display != NULL && _display->isOn()) _display->service();
 
   if (_display != NULL && _display->isOn()) {
-    if (millis() >= _next_refresh && curr) {
+    if (millis() >= _next_refresh && curr && !_display->framePending()) {
       _display->startFrame();
       int delay_millis = curr->render(*_display);
       if (millis() < _alert_expiry) {  // render alert popup
@@ -872,6 +876,8 @@ void UITask::loop() {
           _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
           _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
           _display->endFrame();
+          // Shutdown is terminal: finish the queued warning before powering off.
+          while (_display->framePending()) _display->service();
           if (_display->isEink() == false) { delay(3000); }
         }
         shutdown();

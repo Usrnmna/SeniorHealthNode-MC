@@ -1,7 +1,8 @@
 #pragma once
 #include <stdint.h>
 
-// EDIT HERE, then rebuild heltec_v4_sensor. No alarm state is saved to flash.
+// EDIT HERE, then rebuild heltec_v4_companion_radio_ble. No alarm state is saved to flash.
+// Channel selection can override the defaults below via USB/BLE: set fall.channel.
 namespace HealthNodeConfig {
 // External passive buzzer via a 3.3 V-compatible driver; GPIO is a signal only.
 constexpr int buzzer_pin = 47;          // Free header GPIO on the V4 OLED target.
@@ -17,7 +18,7 @@ constexpr uint32_t low_battery_poll_ms = 1000;
 constexpr uint32_t battery_settle_ms = 10; // ADC divider power-up; loop keeps running.
 constexpr uint8_t battery_adc_samples = 8; // One conversion per loop pass.
 
-// Sampling/recovery and background environmental collection (sensor target only).
+// Sampling/recovery and background environmental collection (combined BLE companion).
 constexpr uint32_t motion_sample_ms = 20;
 constexpr uint8_t motion_fast_failures = 3; // Consecutive failed reads before reinitialization.
 constexpr uint32_t motion_retry_ms = 20;
@@ -42,9 +43,23 @@ constexpr uint32_t click_window_ms = 3000; // First down -> third up, inclusive.
 constexpr uint32_t long_press_ms = 1000;   // Matches heltec_v4/target.cpp; reject >=.
 constexpr uint32_t debounce_ms = 25;       // Each press AND release must settle.
 
+// POST-FALL DIRECTIVES -- response deadline and final continuous quiet period.
+constexpr uint32_t response_timeout_ms = 30000; // Starts when a fall is declared.
+constexpr uint32_t residual_quiet_required_ms = 10000;
+constexpr uint32_t residual_max_sample_gap_ms = 100; // Missing data is UNKNOWN, never quiet.
+// Initial tuning values, requiring worn-device testing (including buzzer vibration).
+constexpr float residual_acceleration_change_g = 0.08f; // Vector change from quiet baseline.
+constexpr float residual_gravity_tolerance_g = 0.08f; // Allowed magnitude deviation from 1 g.
+constexpr float residual_rotation_dps = 5.0f; // Rotation at/above this value breaks quiet.
+// Store plain text only. The formatter adds " | " ONLY when appending text.
+constexpr char unconfirmed_message[] = u8"USER COULD NOT CONFIRM THEIR CONDITION";
+constexpr char no_movement_message[] = u8"NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER";
+constexpr char confirmed_message[] = u8"USER HAS CONFIRMED FALL";
+
 // Channel identity is its shared key, NOT a companion's local channel slot.
 // Public hashtag channel: first 16 bytes of SHA256("#falldetect"), including '#'.
-// For a private channel replace BOTH label and key with the recipient's settings.
+// Runtime selection: set fall.channel public #name, or private Name <shared-key>.
+// These compiled values apply only when no saved channel selection exists.
 constexpr char ack_channel_name[] = "#falldetect"; // Diagnostic label; key below selects channel.
 constexpr uint8_t ack_channel_key[] = {
   0xe9, 0x2d, 0xdc, 0xbf, 0x92, 0x23, 0x43, 0xdf,
@@ -59,7 +74,7 @@ constexpr uint32_t assistance_queue_timeout_ms = 30000; // Drop stale QUEUED pac
 constexpr uint32_t channel_repeat_wait_ms = 15000; // After TX, wait to hear a matching repeater echo.
 constexpr uint8_t channel_transmit_attempts = 4; // Successful local transmissions without hearing a repeat.
 constexpr uint32_t motion_fault_timeout_ms = 5000; // No fresh valid motion -> visible fault.
-constexpr unsigned serial_rx_bytes_per_loop = 16; // Bound serial input/echo work per sensor loop.
+constexpr unsigned serial_rx_bytes_per_loop = 16; // Bound serial input/echo work per companion loop.
 
 static_assert(morse_dot_ms > 0 && sos_silence_ms > 0, "Buzzer durations must be positive");
 static_assert(low_battery_poll_ms > 0 && low_battery_repeat_ms > 0, "Invalid battery timing");
@@ -72,6 +87,12 @@ static_assert(environment_refresh_ms > 0 && environment_stale_ms > environment_r
 static_assert(charging_status_pin < 0 || charging_status_pin != buzzer_pin, "Charging/buzzer pin conflict");
 static_assert(debounce_ms > 0 && debounce_ms < long_press_ms, "Invalid debounce duration");
 static_assert(click_window_ms > 0 && ack_retry_ms > 0 && ack_max_attempts > 0, "Invalid timing");
+static_assert(response_timeout_ms > 0 && response_timeout_ms < 0x80000000UL &&
+              residual_quiet_required_ms > 0 && residual_quiet_required_ms <= response_timeout_ms &&
+              residual_max_sample_gap_ms >= motion_sample_ms &&
+              residual_max_sample_gap_ms < residual_quiet_required_ms, "Invalid post-fall timing");
+static_assert(residual_acceleration_change_g > 0 && residual_gravity_tolerance_g > 0 &&
+              residual_rotation_dps > 0, "Invalid residual movement thresholds");
 static_assert(assistance_queue_timeout_ms > 0 && assistance_queue_timeout_ms < 0x80000000UL &&
               channel_repeat_wait_ms > 0 && channel_repeat_wait_ms < 0x80000000UL &&
               channel_transmit_attempts > 0 && channel_transmit_attempts <= ack_max_attempts &&

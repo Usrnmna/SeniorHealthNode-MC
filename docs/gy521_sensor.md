@@ -1,8 +1,8 @@
 # GY-521 motion alerts on Heltec V4.3 OLED
 
-Build the `heltec_v4_sensor` environment. This runs the polling and decision
+Build the `heltec_v4_companion_radio_ble` environment. This runs the polling and decision
 program on the Heltec itself; a PC is only needed for building/flashing and setup.
-Other firmware environments are unchanged.
+The same image also provides the MeshCore BLE companion, display and messaging. Monitoring continues without a BLE connection.
 
 | GY-521 | Heltec |
 |---|---|
@@ -50,12 +50,12 @@ GPS, USB, flash and board power-control pins. LEDC channel 0 is reserved for
 this buzzer; do not use `tone()` or another PWM user on that channel.
 
 [`AlarmBuzzer.h`](../src/helpers/ui/AlarmBuzzer.h) exposes the single shared
-`alarm_buzzer` instance, defined by the sensor's `main.cpp`:
+`alarm_buzzer` instance, defined in `examples/companion_radio/HealthMonitor.cpp`:
 
 ```cpp
 #include <helpers/ui/AlarmBuzzer.h>
 
-// From another sensor-firmware function, after setup():
+// From another combined-firmware function, after setup():
 alarm_buzzer.beep();     // Default 150 ms; returns immediately.
 // Or: alarm_buzzer.beep(300);  // Explicit duration in milliseconds.
 ```
@@ -64,7 +64,7 @@ alarm_buzzer.beep();     // Default 150 ms; returns immediately.
 `alarm_buzzer.loop()` every loop; callers must not add delays or their own busy
 loops. The API also supplies `startSOS()` and `stop()` for the fall-response owner.
 `beep()` returns false if PWM initialization failed or an SOS/battery sequence is active. The
-serial/authorized sensor command `beep` tests just the sound without creating a
+USB serial command `beep` tests just the sound without creating a
 fall event or sending a channel acknowledgement.
 
 ## Low-battery buzzer reminder
@@ -100,14 +100,18 @@ Pin selection and electrical conditioning must be checked for the actual board.
 The shared buzzer API provides `startLowBattery()` (false while busy/unavailable)
 and `stopLowBattery()` (leaves SOS untouched). `MyMesh::pollLowBattery()` owns the
 voltage policy and repeat timer. No battery-warning state is saved across reboot.
-The sensor target's `HeltecV4Board::pollBattery()` powers the divider, waits 10 ms
+The combined firmware's `HeltecV4Board::pollBattery()` powers the divider, waits 10 ms
 without blocking, then takes one ADC conversion per loop pass until eight are
 averaged. `getBattMilliVolts()` returns that shared cache; telemetry and CLI reads
-do not trigger extra conversions. Voltage is omitted from telemetry and battery
-policy waits until the first complete sample exists. The BLE companion keeps its
-original battery-reading implementation.
+do not trigger extra conversions. Battery warning policy waits until the first complete
+sample exists. The companion retains automatic shutdown below 3400 mV when external
+power is not detected; shutdown stops monitoring and sound.
 
 ## Fall alarm, PRG acknowledgement and channel message
+
+PRG clicks are consumed by the alarm while SOS is active, preventing simultaneous
+companion navigation, mute or shutdown actions. Outside an alarm, normal companion
+button actions remain available.
 
 When `MotionRule` detects a possible fall, the sensor starts repeating
 **SOS: three short, three long, three short tones**. A dot is 150 ms, a dash
@@ -118,7 +122,7 @@ gaps; it never intentionally shortens the five-second silence.
 
 The alarm remains latched until a valid acknowledgement or restart, even if the
 sensor disconnects or the radio fails. Other beeps cannot interrupt it. The initial
-possible-fall alert and the later assistance request are independent public-channel
+possible-fall alert and the later assistance request are independent group-channel
 events. Acknowledging does not recall the initial alert or cancel its retries.
 
 To acknowledge, press and release **PRG three separate times**:
@@ -131,11 +135,11 @@ To acknowledge, press and release **PRG three separate times**:
 - Both edges must remain stable for `debounce_ms = 25`. The window uses edge
   timestamps, so a release exactly at 3000 ms can be confirmed 25 ms later.
 - Only clicks after the fall count. A button already held when the fall is
-  detected must first be released, then clicked three times. Ordinary display
-  wake behavior remains available. Very fast clicks missed by polling cannot count.
+  detected must first be released, then clicked three times. Alarm clicks do not
+  navigate the companion UI. Very fast clicks missed by polling cannot count.
 
-The accepted third release silences SOS immediately and creates **one assistance event per
-acknowledged fall**, with bounded public-channel retries. The configured UTF-8 text is
+Before automatic escalation, the accepted third release silences SOS immediately
+and creates an assistance event with bounded channel retries. The configured UTF-8 text is
 `Fall Detected & User Has Requested Assistance`. When the assistance event is created, the sender queries the local
 MeshCore `LocationProvider`, processes available GPS input, and checks that GPS
 is enabled and the provider reports a valid fix. Latitude must be finite and
@@ -151,35 +155,58 @@ Node name: Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-1
 Node name: Fall Detected & User Has Requested Assistance | HOME
 ```
 
+Without three accepted presses by **30 seconds after detection**, the firmware
+automatically sends that assistance+location text followed by
+` | USER COULD NOT CONFIRM THEIR CONDITION`. If fresh samples instead establish
+quiet for the **final 10 continuous seconds**, it appends
+` | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER`.
+The duration and independent movement thresholds are editable in `HealthNodeConfig.h`.
+Invalid samples, stale data and sampling gaps cannot establish quiet.
+
+Either warning leaves SOS running without an elapsed-time cutoff. Three accepted
+presses afterward stop SOS and send the standalone `USER HAS CONFIRMED FALL`,
+even if earlier delivery failed. This supersedes queued automatic-warning retries
+and unsent warning parts, while an already-transmitting packet finishes normally.
+The original `Possible fall` delivery remains independent. See the
+[directive table and tuning settings](message_delivery_changes.md#post-fall-response-directives).
+
 The query uses the provider's latest reported valid fix and does not wait for a
 new satellite fix, reset the GPS, or enable it automatically. GPS is disabled by
 default in sensor preferences; with compatible hardware connected and detected,
-use the existing `gps on` command to enable it. Disabled GPS, no provider, no
+enable the `gps` custom variable with value `1` through the BLE client
+(`set gps 1` in a compatible local CLI; protocol payload `gps:1`).
+Use `0` to disable it. The USB health command interface does not accept `gps on`. Disabled GPS, no provider, no
 valid fix, or invalid coordinates selects `DefaultLocation`. This provider keeps
 its last fix in memory; a disconnected receiver that has not reported an invalid
-fix can still expose an older location. This change does not add a fix-age limit.
+fix can still expose an older location. There is no fix-age limit.
 Configured advertisement coordinates are not used as a substitute for GPS.
 
 The location is appended once, leaving `ack_message` unchanged. The event text
 and selected location are frozen for retries, preventing repeated suffixes. This
-applies to the assistance message; the initial public alert retains its peak-value
+applies to the assistance message; the initial channel alert retains its peak-value
 text format. The button input reports a request for assistance, not a
 medical assessment of the wearer.
 
-In `HealthNodeConfig.h`, edit `ack_message`, `ack_channel_name`, and
-`ack_channel_key`. The default destination is the public hashtag channel **#falldetect**. Its key
-is the first 16 bytes of SHA256 of the exact name, including `#`:
-`e92ddcbf922343dff181fb4948371236`. Add `#falldetect` as a public hashtag channel
-on each receiving companion. Both fall-message streams use this public channel.
-To select another public channel, set its exact decoded key bytes and label;
-renaming the label alone does not change the destination. Companion channel slot numbers are local
-to each companion and are not radio destinations. The configured key is hashed
-and used with the existing MeshCore group encryption and plain-text payload format.
+Edit `ack_message` in `HealthNodeConfig.h` and rebuild to change the assistance
+text. Select the channel through `set fall.channel public #name` or
+`set fall.channel private Name <shared-key>` over USB or MeshCore One's local BLE
+CLI. See the [channel command guide](cli_commands.md#fall-message-channel-usb-and-ble)
+for key formats, persistence and client setup. The default is public **#falldetect**;
+its key is the first 16 bytes of SHA256 of that exact name, including `#`:
+`e92ddcbf922343dff181fb4948371236`.
+
+Both message streams use the selected group channel. Each incident and queued
+message retains its original destination across changes. Receiving companions
+need the matching key and radio settings. Companion channel slot numbers are
+local to each companion and are not radio destinations.
 
 The sender uses an unscoped flood with adjustable `ack_path_hash_size`, on the
 node's existing frequency, bandwidth, spreading factor and coding rate. Channel
-text is limited to **160 UTF-8 bytes including `node name: ` and the location suffix**. Oversize text is
-rejected and logged, never truncated through a Unicode character. Save edited
+text is limited to **160 UTF-8 bytes including `node name: ` and the location suffix**.
+An automatic warning that does not fit uses two labelled messages: the standalone
+warning first, then assistance+location. No standalone warning begins with ` | `;
+that spacer is inserted only when appending. If an individual part cannot fit,
+the event fails visibly without transmitting a partial or truncated event. Save edited
 headers as UTF-8. Receiver fonts determine which characters render.
 
 Allocation failures, transmit-start failures, and TX timeouts retain the event
@@ -190,27 +217,29 @@ successful sends without one. A repeat proves a rebroadcast was heard, not that 
 particular recipient received it. Each retry uses a fresh timestamp to pass
 repeater deduplication; receiving companions may display duplicate text.
 Exhaustion, missing repeats, and oversize text remain visible through serial and
-`health`; SOS stays silenced. Idle triple clicks never send this message.
+`health`; these outcomes do not change SOS. It stays active after an automatic
+warning and stays silenced after a user acknowledgement. `part_failed=1` retains
+a failed part even if a later part succeeds. Idle triple clicks never send this message.
 See [message-delivery directives and adjustment points](message_delivery_changes.md).
 
-[`FallResponse.h`](../examples/simple_sensor/FallResponse.h) owns the latch and
+[`FallResponse.h`](../examples/companion_radio/health/FallResponse.h) owns the latch and
 button gate; [`TripleClick.h`](../src/helpers/ui/TripleClick.h) owns gesture timing;
 [`BuzzerPattern.h`](../src/helpers/ui/BuzzerPattern.h) owns sound timing;
-[`FallAckSender.h`](../examples/simple_sensor/FallAckSender.h) provides the channel
-send function and [`FallAckMessage.h`](../examples/simple_sensor/FallAckMessage.h)
-encodes its bounded payload. [`FallAckLocation.h`](../examples/simple_sensor/FallAckLocation.h)
-queries the GPS provider. [`AssistanceDelivery.h`](../examples/simple_sensor/AssistanceDelivery.h)
-owns channel attempts, completion state and repeat evidence; `main.cpp` connects
+[`FallAckSender.h`](../examples/companion_radio/health/FallAckSender.h) provides the channel
+send function and [`FallAckMessage.h`](../examples/companion_radio/health/FallAckMessage.h)
+encodes its bounded payload. [`FallAckLocation.h`](../examples/companion_radio/health/FallAckLocation.h)
+queries the GPS provider. [`AssistanceDelivery.h`](../examples/companion_radio/health/AssistanceDelivery.h)
+owns channel attempts, completion state and repeat evidence; `HealthMonitor.cpp` connects
 these to `MotionRule`, the dispatcher, and GPIO.
 
 Alarm state, partial clicks, pending channel send and motion evidence/cooldown
 exist only in ordinary RAM. **Reboot clears all of them**, leaves the buzzer off,
 and starts motion detection with fresh settling. After acknowledgement without a
 reboot, the existing cooldown and quiet-settling requirements still apply.
-Analysis continues while SOS, public delivery, or channel allocation retries are
+Analysis continues while SOS, channel delivery, or channel allocation retries are
 pending. A subsequent detection after the normal cooldown keeps an existing SOS
 and partial click gesture intact. If SOS has stopped, it starts a new local alarm.
-An outstanding initial public alert is retained rather than replaced. Acknowledgments
+An outstanding initial channel alert is retained rather than replaced. Acknowledgments
 coalesce into an already-pending assistance message without restarting its retry
 budget. These policies suppress duplicate notifications, not sensor analysis.
 
@@ -219,16 +248,16 @@ budget. These policies suppress duplicate notifications, not sensor analysis.
 With PlatformIO installed, from the `SeniorHealthNode-MC` folder:
 
 ```powershell
-pio run -e heltec_v4_sensor
-pio run -e heltec_v4_sensor -t upload --upload-port COM_PORT
-pio device monitor --port COM_PORT --baud 115200 --echo --eol CR
+pio run -e heltec_v4_companion_radio_ble
+pio run -e heltec_v4_companion_radio_ble -t upload --upload-port COM_PORT
+pio device monitor --port COM_PORT --baud 115200 --eol CR
 ```
 
 Replace `COM_PORT` with the board's actual port. Create `.venv` in this project
 folder as described in the [Windows setup guide](../README.md#build-and-test-on-windows),
 then replace `pio` with `.\.venv\Scripts\python.exe -m platformio`.
 The project configuration uses `.pio/core` for PlatformIO's cache and `.pio/p`
-for toolchain packages. Run `.\verify.ps1` to build both targets and run all native tests.
+for toolchain packages. Run `.\verify.ps1` to build the combined firmware and run all native tests.
 Configure the node's radio parameters to match your MeshCore network before use.
 
 Serial startup reports detection at 0x68 or a five-second retry. Enter `motion`
@@ -238,19 +267,20 @@ approximately 1 g. Chip temperature is not body temperature.
 
 ## Recipient setup
 
-Add the configured public hashtag channel, initially `#falldetect`, to each
-receiving companion and use compatible radio settings. Both initial possible-fall
-and post-click assistance messages use it; no contact registration or high-priority
+Add the selected public hashtag channel (initially `#falldetect`) or private
+channel with the same shared key to each receiving companion, and match radio
+settings. Initial alerts, automatic warnings, assistance and late confirmation
+all use the incident's captured destination; no contact registration or high-priority
 ACL permission is required for these fall messages. Public hashtag channel keys
 are shared channel identities, not recipient-specific encryption secrets.
 
-Contact login and permissions remain relevant for remote administration and other
-sensor features. Change the sensor's default admin password (`password`) with
-`password <new-password>` when configuring those features.
+Pair a compatible MeshCore phone client directly with this node over BLE to
+configure its name, channels and radio settings. USB serial at 115200 baud
+provides `motion`, `health` and `beep` with CR, LF or CRLF line endings.
 
 Use serial `health` to inspect both message states. `repeater echo heard` confirms
 a matching forwarded packet reached this node; it does not establish that a
-caregiver's companion received or displayed the message. Verify both public texts
+caregiver's companion received or displayed the message. Verify both channel texts
 at the intended listening companion. The [delivery guide](message_delivery_changes.md)
 explains retries, duplicate text, missing repeat evidence, and validation limits.
 
@@ -274,7 +304,7 @@ settling, and the gap guard is unchanged. See [the health diagnostics](message_d
 ### Sampling and background work
 
 - Motion is serviced at the start of the main loop and again after radio work.
-- The sensor target starts a 6,144-byte-stack environmental collector on ESP32
+- The combined firmware starts a 6,144-byte-stack environmental collector on ESP32
   core 0 at idle priority. Environmental initialization and conversion waits run there; the main
   loop reads fixed-size snapshots rather than invoking environmental drivers.
   Measurements refresh every 60 seconds. Empty/failed results replace the old
@@ -288,11 +318,10 @@ settling, and the gap guard is unchanged. See [the health diagnostics](message_d
   buffers and the ESP32 HAL's bus mutex, with a 5 ms transaction timeout. A
   conversion wait does not hold the bus. The timeout is not a guarantee about
   total loop latency, and physical bus faults can still invalidate motion data.
-- While the OLED is on, a frame is queued once per second and transferred in
+- While the OLED is on, frames are queued by the companion UI and transferred in
   32-byte pieces, one per main-loop pass. Each piece readdresses its page and
   column; an I2C failure abandons that frame until the next refresh. The UI keeps
-  the framebuffer unchanged while a transfer is pending. The companion retains
-  full-frame display transfers.
+  the framebuffer unchanged while a transfer is pending.
 
 Configuration and methods are indexed in [the timing change report](fall_timing_changes.md).
 Radio CAD behavior is unchanged. Radio processing, flash operations, serial work,
@@ -300,13 +329,13 @@ and GPS processing remain cooperative work and need hardware latency measurement
 
 ### Review and tune the algorithm
 
-Start with [`MotionRule.h`](../examples/simple_sensor/MotionRule.h). Its
+Start with [`MotionRule.h`](../examples/companion_radio/health/MotionRule.h). Its
 `FallDetectionConfig` contains **all** decision settings; edit defaults there and
 rebuild. The former `MOTION_ACCEL_THRESHOLD_G`, `MOTION_GYRO_THRESHOLD_DPS`, and
 `MOTION_COOLDOWN_MS` build flags are replaced by this configuration. Custom code
 can also pass a `FallDetectionConfig` to the `MotionRule` constructor.
 
-[`main.cpp`](../examples/simple_sensor/main.cpp), `MyMesh::pollMotion()`, supplies
+[`HealthMonitor.cpp`](../examples/companion_radio/HealthMonitor.cpp), `MyMesh::pollMotion()`, supplies
 fresh acceleration and rotation vector magnitudes. Neither magnitude depends on
 which sensor axis points upward, but placement and attachment still matter.
 **Firm torso/chest attachment** is the intended starting point. This does not make
@@ -361,14 +390,14 @@ full measured range. Acceleration and gyro conversions follow the manufacturer's
 Rule tests: `pio test -e native -f test_motion_rule` and
 `pio test -e native -f test_fall_response` and
 `pio test -e native -f test_low_battery` (require a host C++ compiler).
-For an older compiler without the repository's GoogleTest C++17 support, run the
-same checks standalone:
+The motion-rule and low-battery checks also have C++11 standalone entry points.
+Create the output directory first if no build has been run. Use the PlatformIO
+`test_fall_response` command above for response tests and their host dependencies:
 
 ```powershell
+New-Item -ItemType Directory -Force .pio | Out-Null
 g++ -std=c++11 -DMOTION_RULE_STANDALONE test/test_motion_rule/test_motion_rule.cpp -o .pio/motion-rule-tests.exe
 .\.pio\motion-rule-tests.exe
-g++ -std=c++11 -Wall -Wextra -Werror -DFALL_RESPONSE_STANDALONE -I src -I include test/test_fall_response/test_fall_response.cpp -o .pio/fall-response-tests.exe
-.\.pio\fall-response-tests.exe
 g++ -std=c++11 -Wall -Wextra -Werror -DLOW_BATTERY_STANDALONE -I src -I include test/test_low_battery/test_low_battery.cpp -o .pio/low-battery-tests.exe
 .\.pio\low-battery-tests.exe
 ```
@@ -376,7 +405,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -DLOW_BATTERY_STANDALONE -I src -I include 
 The tests replay synthetic 50 Hz sequences, timing boundaries, missing features,
 invalid readings, gaps, cooldown/recovery, and timer rollover. Passing them proves
 software behavior only; no measured sensitivity or false-alert rate is available.
-The six battery tests also cover pitch order, long-tone/gap timing, the ten-minute
+The battery tests also cover pitch order, long-tone/gap timing, the ten-minute
 deadline, charging below threshold, recovery, SOS priority and timer rollover.
 Charging inputs are synthetic; physical charging detection is not verified.
 For real evaluation, use labeled recordings with held-out wearers and daily

@@ -9,6 +9,29 @@ This document provides a comprehensive guide for communicating with MeshCore dev
 
 It is platform-agnostic and can be used for Android, iOS, Python, JavaScript, or any other platform that supports BLE.
 
+## SeniorHealthNode extension
+
+The single `heltec_v4_companion_radio_ble` image uses the standard companion
+custom-variable frames to configure its fall-message destination. The upstream
+reference date above applies to the base guide, not this project extension.
+
+| Request | Payload after command byte | Response |
+| --- | --- | --- |
+| `CMD_GET_CUSTOM_VARS` = 40 (`0x28`) | None | `RESP_CODE_CUSTOM_VARS` = 21 (`0x15`), followed by comma-separated `name:value` entries. `fall.channel` is listed first, then sensor settings that fit. |
+| `CMD_SET_CUSTOM_VAR` = 41 (`0x29`) | UTF-8 `fall.channel:public #name` or `fall.channel:private Name <shared-key>` | Standard OK, illegal-argument or file-I/O-error frame. |
+
+Reads expose `fall.channel:public #name` or `fall.channel:private Name`; they
+never return the shared key. A write may include one final NUL, but embedded NUL
+bytes are rejected. Both BLE and USB use the same validation and persistence
+transaction. The [local command guide](cli_commands.md#fall-message-channel-usb-and-ble)
+describes name/key formats, failed-setting recovery and client setup.
+
+A successful update applies to new incidents. An active incident and its queued
+messages retain the original channel. This setting is independent of ordinary
+chat channel slots and does not create a slot for the client. Fall notifications
+use existing group-text packets; no new over-the-air payload type is introduced.
+`motion`, `health` and `beep` are USB diagnostics, not custom-variable reads.
+
 ## Official Libraries
 
 Please see the following repos for existing MeshCore Companion Protocol libraries.

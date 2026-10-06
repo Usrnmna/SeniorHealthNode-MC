@@ -1,5 +1,9 @@
 # Packet Format
 
+SeniorHealthNode uses this existing wire format for fall notifications. Local
+`Packet::tx_tag` and `tx_deadline` track delivery inside the firmware; they are not
+serialized or included in packet hashes. See the [delivery lifecycle](message_delivery_changes.md).
+
 This document describes the MeshCore packet format.
 
 - `0xYY` indicates `YY` in hex notation.

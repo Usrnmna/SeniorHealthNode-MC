@@ -62,11 +62,18 @@ bool MomentaryButton::isPressed(int level) const {
   }
 }
 
-int MomentaryButton::check(bool repeat_click) {
+int MomentaryButton::check(bool repeat_click, bool suppress) {
   if (_pin < 0) return BUTTON_EVENT_NONE;
 
   int event = BUTTON_EVENT_NONE;
   int btn = _threshold > 0 ? (analogRead(_pin) < _threshold) : digitalRead(_pin);
+  // An alarm can own this input. Consume the current level and all queued UI
+  // clicks so acknowledgement cannot also navigate/mute/shut down the node.
+  if (suppress) {
+    cancelClick();
+    prev = btn;
+    return BUTTON_EVENT_NONE;
+  }
   if (btn != prev) {
     if (isPressed(btn)) {
       down_at = millis();

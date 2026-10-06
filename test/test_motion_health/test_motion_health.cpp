@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include "../../examples/simple_sensor/MotionHealth.h"
+#include "../../examples/companion_radio/health/MotionHealth.h"
 
 TEST(MotionHealth, InvalidReadFaultStartsAtBootTimeZeroAndRecovers) {
   MotionHealth health(100, 1000);

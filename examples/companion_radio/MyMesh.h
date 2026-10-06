@@ -84,7 +84,46 @@ struct AdvertPath {
   uint8_t path[MAX_PATH_SIZE];
 };
 
-class MyMesh : public BaseChatMesh, public DataStoreHost {
+#if ENV_INCLUDE_MPU6050
+#include "health/MotionRule.h"
+#include "health/FallResponse.h"
+#include "health/LowBatteryAlert.h"
+#include "health/MotionHealth.h"
+#include "health/AssistanceDelivery.h"
+#include "health/FallNoticeOutbox.h"
+#endif
+
+class MyMesh : public BaseChatMesh, public DataStoreHost
+#if ENV_INCLUDE_MPU6050
+  , public AssistanceTransport
+#endif
+{
+#if ENV_INCLUDE_MPU6050
+  MotionRule motion_rule;
+  FallResponse fall_response;
+  FallChannel fall_channel;
+  LowBatteryAlert battery_alert;
+  AssistanceDelivery assistance{0}, fall_delivery{1};
+  FallNoticeOutbox fall_notices;
+  MotionHealth motion_health{FallDetectionConfig{}.max_sample_gap_ms, HealthNodeConfig::motion_fault_timeout_ms};
+  bool last_motion_fault = false;
+  AssistanceDelivery::State reported_help = AssistanceDelivery::Idle;
+  AssistanceDelivery::State reported_fall = AssistanceDelivery::Idle;
+
+  void reportAssistance();
+  void onPacketTxComplete(uint32_t tag, bool sent) override;
+  bool handleHealthCommand(const char* command, char* reply);
+  uint8_t setFallChannel(const char* value);
+public:
+  uint32_t uniqueTimestamp() override;
+  AssistanceTransport::Result queueAssistance(const uint8_t* data, unsigned len,
+                                               uint32_t tag, uint8_t fingerprint[8], const FallChannel& channel) override;
+  void cancelAssistance(uint32_t tag) override { cancelQueuedPacket(tag); }
+  void pollMotion();
+  void pollFallResponse();
+  void pollLowBattery();
+  bool fallAlarmActive() const { return fall_response.alarmActive(); }
+#endif
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
 
@@ -200,7 +239,7 @@ private:
     return _store->putBlobByKey(key, key_len, src_buf, len);
   }
 
-  void checkCLIRescueCmd();
+  void checkCLIRescueCmd(bool health_only = false);
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
 
@@ -224,7 +263,8 @@ private:
   bool _iter_started;
   bool _cli_rescue;
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
-  char cli_command[80];
+  char cli_command[160]; // Includes a full private-channel command and key.
+  bool cli_overflow = false;
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;

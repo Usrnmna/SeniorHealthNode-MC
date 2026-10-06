@@ -1,5 +1,10 @@
 # Stats Binary Frame Structures
 
+These standard radio statistics are separate from SeniorHealthNode's USB
+`health` command. Fall/response delivery states, motion outages, sample gaps and
+multipart failure status are reported as text by [local diagnostics](cli_commands.md#local-usb-diagnostics);
+this firmware does not add them to the binary statistics frames below.
+
 Binary frame structures for companion radio stats commands. All multi-byte integers use little-endian byte order.
 
 ## Command Codes

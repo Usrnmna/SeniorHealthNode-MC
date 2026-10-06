@@ -2,8 +2,9 @@
 #include <Mesh.h>
 #include <helpers/StaticPoolPacketManager.h>
 #include <helpers/SimpleMeshTables.h>
-#include "../../examples/simple_sensor/FallAckSender.h"
-#include "../../examples/simple_sensor/MotionRule.h"
+#include "../../examples/companion_radio/health/FallAckSender.h"
+#include "../../examples/companion_radio/health/MotionRule.h"
+#include "../../examples/companion_radio/health/FallNoticeOutbox.h"
 #include <deque>
 #include <vector>
 #include <string>
@@ -53,6 +54,8 @@ struct ChannelRadio : mesh::Radio {
 class ChannelMesh : public mesh::Mesh, public AssistanceTransport {
 public:
   AssistanceDelivery delivery{0}, other_delivery{1};
+  FallNoticeOutbox notices;
+  bool use_notices = false;
   ChannelClock& clock;
   bool forward = false;
   unsigned callbacks = 0, pre_dedup_floods = 0;
@@ -70,8 +73,9 @@ public:
     begin();
   }
   uint32_t uniqueTimestamp() override { return clock.getCurrentTimeUnique(); }
-  Result queueAssistance(const uint8_t* bytes, unsigned len, uint32_t tag, uint8_t fingerprint[8]) override {
-    return FallAckSender::queueGroup(*this, bytes, len, tag, fingerprint);
+  void cancelAssistance(uint32_t tag) override { cancelQueuedPacket(tag); }
+  Result queueAssistance(const uint8_t* bytes, unsigned len, uint32_t tag, uint8_t fingerprint[8], const FallChannel& destination) override {
+    return FallAckSender::queueGroup(*this, bytes, len, tag, fingerprint, destination);
   }
 protected:
   void onPacketTxComplete(uint32_t tag, bool sent) override {
@@ -115,7 +119,8 @@ struct ChannelNode {
   void step(uint32_t elapsed = 20, bool service = true) {
     clock.now += elapsed;
     if (service) {
-      mesh.delivery.poll(clock.now, mesh);
+      if (mesh.use_notices) mesh.notices.poll(clock.now, mesh, mesh.delivery);
+      else mesh.delivery.poll(clock.now, mesh);
       mesh.other_delivery.poll(clock.now, mesh);
     }
     mesh.loop();
@@ -151,6 +156,35 @@ TEST(ProductionCrypto, Sha256UsesRealImplementation) {
   mesh::Utils::sha256(hash, sizeof(hash), input, sizeof(input));
   const uint8_t expected[] = {0xba, 0x78, 0x16, 0xbf};
   EXPECT_EQ(0, memcmp(hash, expected, sizeof(expected)));
+}
+
+TEST(ProductionCrypto, HashtagChannelMatchesCompiledDefault) {
+  FallChannel channel;
+  ASSERT_TRUE(FallChannel::parse("public #falldetect", channel));
+  EXPECT_EQ(16, channel.key_length);
+  EXPECT_EQ(0, memcmp(channel.key, HealthNodeConfig::ack_channel_key, 16));
+}
+
+TEST_F(AssistanceChannel, PrivateChannelsDecryptOnlyWithMatchingKey) {
+  for (const char* value : {"private CareGroup 00112233445566778899AABBCCDDEEFF",
+       "private CareGroup 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"}) {
+    ChannelNode source, matching, wrong;
+    FallChannel destination;
+    ASSERT_TRUE(FallChannel::parse(value, destination));
+    memcpy(matching.mesh.channel.secret, destination.key, 32);
+    mesh::Utils::sha256(matching.mesh.channel.hash, sizeof(matching.mesh.channel.hash),
+                        destination.key, destination.key_length);
+    ASSERT_TRUE(source.mesh.delivery.begin(source.clock.now, source.mesh, text.data(), text.size(), destination));
+    // Editing the caller's selection cannot retarget the queued event.
+    destination = FallChannel{};
+    source.step(); source.step();
+    ASSERT_EQ(1u, source.radio.frames.size());
+    matching.radio.inbound.push_back(source.radio.frames.front()); matching.step();
+    wrong.radio.inbound.push_back(source.radio.frames.front()); wrong.step();
+    ASSERT_EQ(1u, matching.mesh.plaintexts.size());
+    EXPECT_TRUE(wrong.mesh.plaintexts.empty());
+    EXPECT_EQ(0, memcmp(text.data() + 4, matching.mesh.plaintexts.front().data() + 4, text.size() - 4));
+  }
 }
 
 TEST_F(AssistanceChannel, PublicCiphertextDecryptsToConfiguredTextOnRealMesh) {
@@ -449,6 +483,77 @@ TEST_F(AssistanceChannel, EchoOnlyConfirmsItsOwnMessageOwner) {
   sender.radio.inbound.push_back(receiver.radio.frames[0]); sender.step();
   EXPECT_EQ(AssistanceDelivery::Repeated, sender.mesh.delivery.state());
   EXPECT_EQ(AssistanceDelivery::Transmitted, sender.mesh.other_delivery.state());
+}
+
+// Group decryption includes zero padding to the cipher block boundary. Compare
+// all non-padding bytes, just as a receiving chat client reads the text field.
+static std::string decodedText(const std::vector<uint8_t>& bytes) {
+  EXPECT_GE(bytes.size(), 5u);
+  if (bytes.size() < 5) return "";
+  size_t end = bytes.size();
+  while (end > 5 && bytes[end - 1] == 0) --end;
+  return std::string(reinterpret_cast<const char*>(bytes.data() + 5), end - 5);
+}
+
+TEST_F(AssistanceChannel, AutomaticWarningDecryptsWithExactAppendedText) {
+  sender.mesh.use_notices = true;
+  const auto m = FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, "Node", false, 0, 0);
+  ASSERT_TRUE(sender.mesh.notices.enqueue(FallNotice::UserCouldNotConfirm, 1, m));
+  finishLocal(); deliver(sender.radio.frames[0]);
+  ASSERT_EQ(1u, receiver.mesh.plaintexts.size());
+  const auto& bytes = receiver.mesh.plaintexts[0];
+  EXPECT_EQ("Node: Fall Detected & User Has Requested Assistance | HOME | USER COULD NOT CONFIRM THEIR CONDITION",
+      decodedText(bytes));
+}
+
+TEST_F(AssistanceChannel, ConfirmationCancelsActualQueuedWarningDuringBusyRadio) {
+  sender.mesh.use_notices = true; sender.radio.busy = true;
+  sender.mesh.notices.enqueue(FallNotice::NoResidualMovement, 1,
+      FallNoticeMessage::build(FallNotice::NoResidualMovement, "Node", false, 0, 0));
+  sender.step(); ASSERT_EQ(AssistanceDelivery::Queued, sender.mesh.delivery.state());
+  sender.mesh.notices.enqueue(FallNotice::UserConfirmedFall, 1,
+      FallNoticeMessage::build(FallNotice::UserConfirmedFall, "Node", false, 0, 0));
+  sender.step(); EXPECT_EQ(1u, sender.mesh.callbacks); EXPECT_TRUE(sender.radio.frames.empty());
+  sender.radio.busy = false; sender.step(2000); sender.step(); // Allow CAD backoff to expire.
+  ASSERT_EQ(1u, sender.radio.frames.size()); deliver(sender.radio.frames[0]);
+  ASSERT_EQ(1u, receiver.mesh.plaintexts.size()); const auto& bytes = receiver.mesh.plaintexts[0];
+  EXPECT_EQ("Node: USER HAS CONFIRMED FALL",
+      decodedText(bytes));
+}
+
+TEST_F(AssistanceChannel, InFlightAutomaticWarningFinishesBeforeConfirmation) {
+  sender.mesh.use_notices = true; sender.radio.completes = false;
+  sender.mesh.notices.enqueue(FallNotice::UserCouldNotConfirm, 1,
+      FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, "Node", false, 0, 0));
+  sender.step(); ASSERT_EQ(1u, sender.radio.frames.size());
+  sender.mesh.notices.enqueue(FallNotice::UserConfirmedFall, 1,
+      FallNoticeMessage::build(FallNotice::UserConfirmedFall, "Node", false, 0, 0));
+  sender.step(); EXPECT_EQ(0u, sender.mesh.callbacks); EXPECT_EQ(1u, sender.radio.frames.size());
+  sender.radio.completes = true;
+  for (unsigned i = 0; i < 8; ++i) sender.step();
+  ASSERT_EQ(2u, sender.radio.frames.size()); EXPECT_EQ(2u, sender.mesh.callbacks);
+  deliver(sender.radio.frames[0]); deliver(sender.radio.frames[1]);
+  ASSERT_EQ(2u, receiver.mesh.plaintexts.size()); const auto& bytes = receiver.mesh.plaintexts[1];
+  EXPECT_EQ("Node: USER HAS CONFIRMED FALL",
+      decodedText(bytes));
+}
+
+TEST_F(AssistanceChannel, MultipartWarningPreservesAllTextThroughRealEncryption) {
+  sender.mesh.use_notices = true; receiver.mesh.forward = true;
+  const std::string name(31, 'N');
+  const auto m = FallNoticeMessage::build(FallNotice::NoResidualMovement, name.c_str(), true, -90, -180);
+  ASSERT_EQ(2u, m.count);
+  sender.mesh.notices.enqueue(FallNotice::NoResidualMovement, 1, m);
+  for (unsigned part = 0; part < 2; ++part) {
+    sender.step(); sender.step();
+    ASSERT_EQ(part + 1u, sender.radio.frames.size()); deliver(sender.radio.frames[part]); receiver.step();
+    ASSERT_EQ(part + 1u, receiver.mesh.plaintexts.size());
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(m.payload[part] + 5), m.length[part] - 5),
+        decodedText(receiver.mesh.plaintexts[part]));
+    ASSERT_EQ(part + 1u, receiver.radio.frames.size());
+    sender.radio.inbound.push_back(receiver.radio.frames[part]); sender.step();
+  }
+  sender.step(); EXPECT_FALSE(sender.mesh.notices.busy()); EXPECT_FALSE(sender.mesh.notices.partFailed());
 }
 
 int main(int argc, char** argv) {
