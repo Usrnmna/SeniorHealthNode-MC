@@ -8,6 +8,10 @@ Applies to `heltec_v4_companion_radio_ble`, Heltec V4.3 OLED + external GY-521.
 Numbers below are **ESP32 GPIO numbers**, not connector positions or IC package
 pin numbers. Arrows show signal direction; `<-->` is bidirectional.
 Onboard connections are already wired on the Heltec PCB.
+The [manufacturer specification reference](heltec_v4_spec_reference.md) records
+the supplied V4.3.1 datasheet, which specifies GPIO36 HIGH for Vext and agrees
+with this firmware. It also identifies remaining battery-equation and FEM-label
+discrepancies and separates older V4.2 schematic evidence.
 
 ## At-a-glance connection chart
 
@@ -218,8 +222,10 @@ Charging-status sensing remains disabled (`charging_status_pin = -1`).
 No additional charging-status wire is specified here.
 
 This is a firmware-derived connection guide, not a complete PCB netlist of every
-power, USB, memory or protection IC. The manufacturer schematic could not be
-retrieved during this check; those IC package connections are not inferred.
+power, USB, memory or protection IC. The supplied V4.3.1 datasheet contains no
+embedded schematic; the older V4.2 PDF includes a V4.2 schematic. See the
+[specification reference](heltec_v4_spec_reference.md). Neither establishes the
+complete V4.3 netlist here; those IC package connections are not inferred.
 Hardware wiring and operation have not been physically verified.
 
 Sources in this checkout:

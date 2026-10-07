@@ -327,6 +327,7 @@ reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/companion_radio
 | --- | --- |
 | [Sensor and buzzer](docs/gy521_sensor.md) | Wiring, button gestures, battery reminders, detector tuning and recipient setup. |
 | [Pin reference](docs/pin_schematic.md) | Firmware-derived GPIO connections and optional peripherals. |
+| [Heltec V4 specification](docs/heltec_v4_spec_reference.md) | V4.3.1 datasheet specifications, header positions, power figures and explicitly identified V4.2 comparisons. |
 | [Local commands](docs/cli_commands.md) | USB diagnostics, persisted public/private fall channels and BLE client usage. |
 | [Response and delivery](docs/message_delivery_changes.md) | Automatic escalation, late confirmation, multipart text, retry states and limits. |
 | [Timing](docs/fall_timing_changes.md) | Motion polling, background telemetry, OLED transfers and battery acquisition. |
