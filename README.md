@@ -28,6 +28,12 @@ USB `battery` reports cached ADC counts, voltage and sample age. `battery calibr
 
 ## Combined firmware
 
+The [USB CLI reference](docs/usb_cli_reference.md) documents companion `get`/`set`
+configuration, `set username`, and detailed health/motion statistics. Statistics
+use bounded RAM aggregates after fall processing; replies drain incrementally.
+No logging or streaming capability is added. Hardware timing remains subject to
+bench verification.
+
 `heltec_v4_companion_radio_ble` is the only firmware target. It includes MeshCore BLE, contacts, messaging, display, GPS and environmental telemetry, plus GY-521/MPU6050 fall detection, SOS, PRG acknowledgement and low-battery reminders.
 
 Build it with `pio run` or `pio run -e heltec_v4_companion_radio_ble`. The `native` and `native_delivery` environments are host-side software tests, not firmware images. One upload installs the companion and health-monitoring features together.
@@ -93,10 +99,10 @@ playback after rebuilding and flashing. Motion monitoring, BLE, PRG responses
 and group-channel messages remain active. See
 [operation without a buzzer](docs/gy521_sensor.md#operation-without-a-buzzer).
 
-`buzzer_active_low = true` in [`include/HealthNodeConfig.h`](include/HealthNodeConfig.h)
-defaults to LOW-level-trigger passive buzzer modules: GPIO47 stays HIGH when
-silent and uses 50% PWM for tones. Set it to `false` for a HIGH-active driver
-(including the discrete NPN alternative), then rebuild and flash. An incorrect
+`buzzer_active_low = false` in [`include/HealthNodeConfig.h`](include/HealthNodeConfig.h)
+selects LOW idle for the DIYables passive module: GPIO47 uses 50% PWM for tones
+and disconnects PWM during silence. Playback remains nonblocking. Set it to `true`
+only for an alternative driver requiring HIGH idle, then rebuild and flash. An incorrect
 setting can leave the driver energized during intended silence even when tones
 sound normal, with possible extra current draw or heating depending on hardware.
 See [polarity settings and wiring](docs/gy521_sensor.md#buzzer-trigger-polarity).
@@ -254,7 +260,7 @@ Run the following commands from `SeniorHealthNode-MC`, with PlatformIO Core inst
    pio run -e heltec_v4_companion_radio_ble -t upload --upload-port COM_PORT
    ```
 
-3. Connect a passive buzzer through a suitable driver on GPIO47, following the [wiring guide](docs/gy521_sensor.md#passive-buzzer-wiring-and-shared-functions). Configure the message and fallback location in [`HealthNodeConfig.h`](include/HealthNodeConfig.h), then rebuild after changing those settings. Select the channel with the USB/BLE commands above.
+3. Connect the DIYables passive module I/O to GPIO47, VCC to 3V3 and GND to GND, following the [wiring guide](docs/gy521_sensor.md#passive-buzzer-wiring-and-shared-functions). Its driver is onboard. Configure the message and fallback location in [`HealthNodeConfig.h`](include/HealthNodeConfig.h), then rebuild after changing those settings. Select the channel with the USB/BLE commands above.
 4. Add the selected public hashtag channel (initially `#falldetect`) or matching private channel and shared key to each receiving companion and match radio settings. Fall messages do not require contact registration. Pair your phone with this node over BLE using the default PIN `12345` (`012345` in a six-digit prompt), then configure its name, channels and radio settings through the MeshCore client. A saved custom PIN takes precedence over the default.
 5. Use a serial monitor at **115200 baud** and enter `motion` to inspect the latest sensor reading. Test alert delivery with the intended recipient and at the intended location before relying on the setup.
 
@@ -362,6 +368,7 @@ reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/companion_radio
 | [Pin reference](docs/pin_schematic.md) | Firmware-derived GPIO connections and optional peripherals. |
 | [Heltec V4 specification](docs/heltec_v4_spec_reference.md) | V4.3.1 specifications, schematic-verified battery/FEM corrections, ADC scaling and V4.2 comparisons. |
 | [Local commands](docs/cli_commands.md) | USB diagnostics, persisted public/private fall channels and BLE client usage. |
+| [USB configuration and statistics](docs/usb_cli_reference.md) | Shared companion settings, username, health/motion details, limits and measurement semantics. |
 | [USB serial debugging](docs/usb_serial_debugging.md) | Windows PowerShell and Linux monitoring, timestamped logs, sensor/fault interpretation and connection troubleshooting. |
 | [Gyroscope calibration](docs/gyro_calibration.md) | Stationary calibration in any orientation, USB/BLE controls, persistence, quality checks and verification. |
 | [Response and delivery](docs/message_delivery_changes.md) | Automatic escalation, fall/false-alarm responses, multipart text, retry states and limits. |

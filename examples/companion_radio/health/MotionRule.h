@@ -102,6 +102,15 @@ public:
   // Retain event evidence for alert text; confirmation samples are usually near 1 g.
   float peakAcceleration() const { return peak_accel; }
   float peakRotation() const { return peak_gyro; }
+  const char* stateName() const {
+    switch (state) {
+      case Armed: return "armed";
+      case Peaks: return "collecting-peaks";
+      case Confirming: return "confirming-quiet";
+      default: return "settling";
+    }
+  }
+  bool cooldownActive() const { return cooling; }
 
 private:
   enum State { Settling, Armed, Peaks, Confirming };

@@ -29,6 +29,14 @@ public:
   }
 
   bool valid = false;
+  struct Diagnostics {
+    uint32_t bus_errors = 0, short_reads = 0, not_ready = 0, data_timeouts = 0;
+    uint32_t init_attempts = 0, init_failures = 0, reinitializations = 0, recoveries = 0;
+    uint32_t config_mismatches = 0, identity_mismatches = 0;
+  };
+  const Diagnostics& diagnostics() const { return counters; }
+  void resetDiagnostics() { counters = Diagnostics{}; }
+  bool initialized() const { return ready; }
 
   // Accept only a complete burst with DATA_RDY_INT set. The status byte and
   // measurement block share one I2C transaction; no separate INT wire is needed.
@@ -38,9 +46,12 @@ public:
     started = true;
     last_poll = now;
     if (!ready) {
-      uint8_t id;
+      ++counters.init_attempts;
+      uint8_t id = 0;
       valid = false;
-      ready = read(0x75, &id, 1) && id == 0x68
+      const bool identified = read(0x75, &id, 1);
+      if (identified && id != 0x68) ++counters.identity_mismatches;
+      ready = identified && id == 0x68
         && configure(0x6B, 0x01, 0xEF) // Awake, temperature on, X gyro PLL.
         && configure(0x6C, 0x00, 0xFF) // All axes enabled.
         && configure(0x1A, 0x03, 0x3F) // DLPF=3, no external sync.
@@ -50,6 +61,7 @@ public:
         && configure(0x37, 0x00, 0xFE) // Clear status only when INT_STATUS is read.
         && configure(0x38, 0x01, 0x19); // Enable data-ready status; INT left unconnected.
       Serial.println(ready ? "MPU6050 ready at 0x68" : "MPU6050 unavailable; retry in 5s");
+      if (!ready) { ++counters.init_failures; recovering = true; }
       wait_ms = ready ? motion_sample_ms : motion_missing_retry_ms;
       failed_reads = 0;
       ready_at = now;
@@ -63,9 +75,12 @@ public:
       return false;
     }
     if (!(burst[0] & 0x01)) {
+      ++counters.not_ready;
       // A healthy bus can still return an unchanged sensor sample. Do not feed
       // it to the detector or clear its fresh-data outage. Recover a stuck sensor.
-      if (uint32_t(now - last_data_at) >= motion_data_timeout_ms) sampleFailed();
+      if (uint32_t(now - last_data_at) >= motion_data_timeout_ms) {
+        ++counters.data_timeouts; sampleFailed();
+      }
       return false;
     }
     const uint8_t* data = burst + 1;
@@ -73,6 +88,7 @@ public:
               word(data+8)/65.5f, word(data+10)/65.5f, word(data+12)/65.5f,
               word(data+6)/340.0f + 36.53f};
     applyCalibration();
+    if (recovering) { ++counters.recoveries; recovering = false; }
     valid = true;
     last_data_at = now;
     failed_reads = 0;
@@ -81,6 +97,8 @@ public:
   }
 
 private:
+  Diagnostics counters;
+  bool recovering = false;
   GyroCalibration::Result correction;
   void applyCalibration() {
     values = raw_values;
@@ -97,15 +115,18 @@ private:
   // A bus failure or mismatch prevents readiness and uses the normal slow retry.
   bool configure(uint8_t reg, uint8_t value, uint8_t mask) {
     uint8_t actual;
-    return write(reg, value) && read(reg, &actual, 1) &&
-           (actual & mask) == (value & mask);
+    if (!write(reg, value) || !read(reg, &actual, 1)) return false;
+    if ((actual & mask) == (value & mask)) return true;
+    ++counters.config_mismatches; return false;
   }
   // Invalidate immediately, then attempt reinitialization after repeated faults.
   void sampleFailed() {
     valid = false;
+    recovering = true;
     wait_ms = HealthNodeConfig::motion_retry_ms;
     if (++failed_reads >= HealthNodeConfig::motion_fast_failures) {
       ready = false;
+      ++counters.reinitializations;
       Serial.println("MPU6050 read/data-ready failures; reinitializing");
     }
   }
@@ -115,24 +136,31 @@ private:
     // buffer is otherwise shared with the environmental collector after
     // requestFrom() releases its object lock but before read() consumes it.
     const uint8_t data[] = {reg, value};
-    return i2cWrite(1, 0x68, data, sizeof(data), HealthNodeConfig::sensor_i2c_timeout_ms) == ESP_OK;
+    const bool success = i2cWrite(1, 0x68, data, sizeof(data), HealthNodeConfig::sensor_i2c_timeout_ms) == ESP_OK;
 #else
     Wire1.beginTransmission(0x68);
     Wire1.write(reg); Wire1.write(value);
-    return Wire1.endTransmission() == 0;
+    const bool success = Wire1.endTransmission() == 0;
 #endif
+    if (!success) ++counters.bus_errors;
+    return success;
   }
   bool read(uint8_t reg, uint8_t* dest, uint8_t count) {
 #ifdef ESP32
     size_t received = 0;
-    return i2cWriteReadNonStop(1, 0x68, &reg, 1, dest, count,
-        HealthNodeConfig::sensor_i2c_timeout_ms, &received) == ESP_OK && received == count;
+    const bool success = i2cWriteReadNonStop(1, 0x68, &reg, 1, dest, count,
+        HealthNodeConfig::sensor_i2c_timeout_ms, &received) == ESP_OK;
+    if (received != count) ++counters.short_reads;
+    if (!success) { ++counters.bus_errors; return false; }
+    if (received != count) return false;
+    return true;
 #else
     Wire1.beginTransmission(0x68);
     Wire1.write(reg);
-    if (Wire1.endTransmission(false) != 0) return false;
+    if (Wire1.endTransmission(false) != 0) { ++counters.bus_errors; return false; }
     if (Wire1.requestFrom(uint8_t(0x68), count) != count) {
       while (Wire1.available()) Wire1.read();
+      ++counters.short_reads;
       return false;
     }
     for (uint8_t i = 0; i < count; ++i) dest[i] = Wire1.read();

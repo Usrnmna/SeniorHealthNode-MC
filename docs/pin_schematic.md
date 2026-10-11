@@ -29,10 +29,9 @@ EXTERNAL CONNECTIONS
                   AD0  ---------------- GND    (address 0x68)
                   INT, XDA, XCL -------- no connection
 
-  Passive buzzer driver IN ------------ GPIO47 (PWM control)
-                        GND ----------- GND
-                        V+ ------------ buzzer-rated supply
-                        OUT ----------- passive buzzer (driver-specific)
+  DIYables passive buzzer I/O --------- GPIO47 (PWM; LOW idle)
+                         GND ---------- GND
+                         VCC ---------- 3V3
 
 OPTIONAL EXTERNAL CONNECTIONS
   GPS module TX ----------------------- GPIO38 (ESP32 RX)
@@ -84,12 +83,10 @@ GND ------------------------------------ AD0   [I2C address 0x68]
                                          XDA   [unconnected]
                                          XCL   [unconnected]
 
-HELTEC / ESP32-S3                         PASSIVE BUZZER DRIVER
-GPIO47 (PWM) --------------------------> IN    [3.3 V logic, LOW-trigger default]
+HELTEC / ESP32-S3                         DIYABLES PASSIVE BUZZER MODULE
+GPIO47 (PWM) --------------------------> I/O   [3.3 V logic, LOW idle]
 GND ------------------------------------ GND
-Buzzer-rated supply -------------------- V+
-                                         OUT -- passive buzzer
-                                         (per driver's output wiring)
+3V3 ------------------------------------ VCC   [onboard transistor driver]
 
 Discrete NPN alternative (set buzzer_active_low = false):
 
@@ -108,9 +105,11 @@ The existing buzzer guide suggests 1 kohm base and 47 kohm pull-down resistors
 as starting values; size the driver for the selected buzzer. An inductive buzzer
 requires appropriate flyback protection. GPIO47 supplies a control signal only.
 
-`buzzer_active_low = true` is the default for a LOW-level-trigger module: GPIO47
-is HIGH during silence and supplies 50% PWM during tones. Set it to `false` for
-the HIGH-active NPN alternative, then rebuild and flash. The wrong setting can
+`buzzer_active_low = false` is the default: GPIO47 is LOW during silence and
+supplies 50% PWM during tones. PWM is disconnected during silent intervals.
+The DIYables module uses its onboard driver; the discrete circuit is an alternative.
+Set polarity to `true` only for an alternative driver requiring HIGH idle,
+then rebuild and flash. The wrong setting can
 leave the driver energized during intended silence even if tones sound normal.
 See [trigger polarity, reset bias and incorrect-setting effects](gy521_sensor.md#buzzer-trigger-polarity).
 

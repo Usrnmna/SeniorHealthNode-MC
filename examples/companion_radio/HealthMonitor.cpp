@@ -108,6 +108,8 @@ void MyMesh::pollMotion() {
   if (was_calibrating || gyro_calibration.active()) {
     fall_response.motionUnavailable();
     motion_rule.update(now, 0, 0, false);
+    motion_statistics.observe(now, sensors.motion.values, sensors.motion.raw_values,
+        fresh, sensors.motion.valid, FallDetectionConfig{}.max_sample_gap_ms);
     return;
   }
   // Outside maintenance, sensor validity gates analysis independently of delivery.
@@ -118,13 +120,14 @@ void MyMesh::pollMotion() {
   }
   if (!fresh) return;
   const auto& v = sensors.motion.values;
-  fall_response.observeMotion(now, v.ax, v.ay, v.az, v.rotation());
-  if (motion_rule.update(now, v.acceleration(), v.rotation(), true)) {
+  const float acceleration = v.acceleration(), rotation = v.rotation();
+  fall_response.observeMotion(now, v.ax, v.ay, v.az, rotation);
+  if (motion_rule.update(now, acceleration, rotation, true)) {
     // Coalesce notifications without resetting SOS/button progress or cancelling
     // an earlier channel alert. MotionRule still enforces its normal cooldown.
     if (fall_response.onFall(now, digitalRead(PIN_USER_BTN) == LOW, fall_channel)) {
       alarm_buzzer.startSOS();
-      fall_response.observeMotion(now, v.ax, v.ay, v.az, v.rotation());
+      fall_response.observeMotion(now, v.ax, v.ay, v.az, rotation);
     }
     char text[120];
     // Report the detected sequence's peaks, not the later quiet sample.
@@ -136,6 +139,8 @@ void MyMesh::pollMotion() {
         fall_response.incidentChannel(), fall_response.incidentId());
     Serial.printf("%s (%s)\n", text, accepted ? "channel event accepted" : "coalesced with pending alert");
   }
+  motion_statistics.observeWithMagnitudes(now, v, sensors.motion.raw_values, acceleration, rotation,
+      FallDetectionConfig{}.max_sample_gap_ms);
 }
 bool MyMesh::handleHealthCommand(const char* command, char* reply) {
   if (strcmp(command, "calibrate") == 0 || strncmp(command, "calibrate ", 10) == 0) {
@@ -159,16 +164,9 @@ bool MyMesh::handleHealthCommand(const char* command, char* reply) {
       strcpy(reply, "Error: multiplier must be 0..10; 0 restores board default");
       return true;
     }
-    const float previous = _prefs.adc_multiplier;
-    _prefs.adc_multiplier = value;
-    if (!_store->savePrefs(_prefs)) {
-      _prefs.adc_multiplier = previous;
-      strcpy(reply, "Error: calibration save failed; live multiplier unchanged");
-      return true;
-    }
-    board.setAdcMultiplier(value);
-    snprintf(reply, 160, "OK: saved multiplier %.4f; verify battery voltage with meter",
-             board.getAdcMultiplier());
+    NodePrefs candidate(_prefs); candidate.adc_multiplier = value;
+    if (!commitSettings(candidate, reply))
+      snprintf(reply, 160, "OK: saved multiplier %.4f; verify battery voltage with meter", board.getAdcMultiplier());
     return true;
   }
   if (strcmp(command, "battery") == 0) {
@@ -288,6 +286,7 @@ uint8_t MyMesh::controlCalibration(const char* action, char* reply) {
     strcpy(reply, "Error: calibration save failed; live correction unchanged"); return 2;
   }
   sensors.motion.setCalibration(candidate);
+  motion_statistics.reset(now, "calibration-changed");
   if (reset) gyro_calibration.reset(); else gyro_calibration.saved();
   motion_rule.update(now, 0, 0, false);
   strcpy(reply, reset ? "Default zero correction saved; detector must rearm"

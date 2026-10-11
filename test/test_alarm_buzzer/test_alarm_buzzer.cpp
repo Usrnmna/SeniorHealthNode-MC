@@ -13,6 +13,7 @@ static bool setup_succeeds = true;
 static uint32_t output_duty = 0;
 static uint32_t output_frequency = 0;
 static int output_level = LOW;
+static bool output_attached = false;
 
 void digitalWrite(int, int level) {
   output_level = level;
@@ -29,7 +30,12 @@ void ledcWrite(uint8_t, uint32_t duty) {
   output_events.push_back({'W', duty});
 }
 void ledcAttachPin(uint8_t, uint8_t) {
+  output_attached = true;
   output_events.push_back({'A', output_duty});
+}
+void ledcDetachPin(uint8_t) {
+  output_attached = false;
+  output_events.push_back({'D', output_duty});
 }
 
 #include <helpers/ui/AlarmBuzzer.h>
@@ -42,6 +48,7 @@ protected:
     setup_succeeds = true;
     output_duty = output_frequency = 0;
     output_level = LOW;
+    output_attached = false;
     g_mock_millis = 0;
   }
   uint32_t silentDuty() const { return GetParam() ? 255 : 0; }
@@ -51,15 +58,14 @@ protected:
   }
 };
 
-TEST_P(AlarmBuzzerPolarity, InitializesInactiveBeforeAttachingPwm) {
+TEST_P(AlarmBuzzerPolarity, InitializesInactiveWithPwmDisconnected) {
   AlarmBuzzer buzzer(GetParam(), true);
   ASSERT_TRUE(buzzer.begin());
   EXPECT_EQ(output_level, GetParam() ? HIGH : LOW);
-  ASSERT_EQ(output_events.size(), 4u);
+  ASSERT_EQ(output_events.size(), 3u);
   EXPECT_EQ(output_events.front().operation, 'G');
   EXPECT_EQ(output_events[2].operation, 'W');
-  EXPECT_EQ(output_events[3].operation, 'A');
-  EXPECT_EQ(output_events[3].value, silentDuty());
+  EXPECT_FALSE(output_attached);
   EXPECT_EQ(output_duty, silentDuty());
 }
 
@@ -79,10 +85,13 @@ TEST_P(AlarmBuzzerPolarity, BeepUsesHalfDutyAndReturnsToInactive) {
   AlarmBuzzer buzzer(GetParam(), true);
   ASSERT_TRUE(buzzer.begin());
   ASSERT_TRUE(buzzer.beep());
+  EXPECT_TRUE(output_attached);
   EXPECT_EQ(output_duty, 128u);
   EXPECT_EQ(output_frequency, HealthNodeConfig::buzzer_frequency_hz);
   advance(buzzer, HealthNodeConfig::beep_ms);
   EXPECT_EQ(output_duty, silentDuty());
+  EXPECT_FALSE(output_attached);
+  EXPECT_EQ(output_level, GetParam() ? HIGH : LOW);
 }
 
 TEST_P(AlarmBuzzerPolarity, SosGapsAndExplicitStopAreInactive) {
@@ -93,10 +102,13 @@ TEST_P(AlarmBuzzerPolarity, SosGapsAndExplicitStopAreInactive) {
   EXPECT_FALSE(buzzer.beep());
   advance(buzzer, HealthNodeConfig::morse_dot_ms);
   EXPECT_EQ(output_duty, silentDuty());
+  EXPECT_FALSE(output_attached);
   advance(buzzer, HealthNodeConfig::morse_dot_ms);
   EXPECT_EQ(output_duty, 128u);
+  EXPECT_TRUE(output_attached);
   buzzer.stop();
   EXPECT_EQ(output_duty, silentDuty());
+  EXPECT_FALSE(output_attached);
 }
 
 TEST_P(AlarmBuzzerPolarity, BatteryTonesRetuneWhileInactiveAndFinishInactive) {
@@ -108,9 +120,10 @@ TEST_P(AlarmBuzzerPolarity, BatteryTonesRetuneWhileInactiveAndFinishInactive) {
     EXPECT_EQ(output_duty, 128u);
     advance(buzzer, HealthNodeConfig::long_beep_ms);
     EXPECT_EQ(output_duty, silentDuty());
+    EXPECT_FALSE(output_attached);
     if (tone < 2) advance(buzzer, HealthNodeConfig::low_battery_gap_ms);
   }
-  EXPECT_EQ(output_frequency, HealthNodeConfig::buzzer_frequency_hz);
+  EXPECT_EQ(output_frequency, HealthNodeConfig::low_battery_tones_hz[2]);
   // Every frequency change after initialization must be preceded by inactive duty.
   unsigned frequency_changes = 0;
   for (size_t i = 2; i < output_events.size(); ++i) {
@@ -119,7 +132,35 @@ TEST_P(AlarmBuzzerPolarity, BatteryTonesRetuneWhileInactiveAndFinishInactive) {
     EXPECT_EQ(output_events[i - 1].operation, 'W');
     EXPECT_EQ(output_events[i - 1].value, silentDuty());
   }
-  EXPECT_EQ(frequency_changes, 4u); // Three battery pitches, then ordinary pitch.
+  EXPECT_EQ(frequency_changes, 3u); // No idle retune after the last battery pitch.
+}
+
+TEST_P(AlarmBuzzerPolarity, IdlePollingDoesNotTouchHardwareAndBeepRestoresPitch) {
+  AlarmBuzzer buzzer(GetParam(), true);
+  ASSERT_TRUE(buzzer.begin());
+  ASSERT_TRUE(buzzer.startLowBattery());
+  buzzer.stopLowBattery();
+  const size_t events = output_events.size();
+  for (unsigned i = 0; i < 1000; ++i) advance(buzzer, 20);
+  EXPECT_EQ(events, output_events.size());
+  EXPECT_FALSE(output_attached);
+  ASSERT_TRUE(buzzer.beep());
+  EXPECT_EQ(output_frequency, HealthNodeConfig::buzzer_frequency_hz);
+  EXPECT_TRUE(output_attached);
+}
+
+TEST_P(AlarmBuzzerPolarity, FailedPitchChangeLeavesDisconnectedInactiveOutput) {
+  AlarmBuzzer buzzer(GetParam(), true);
+  ASSERT_TRUE(buzzer.begin());
+  setup_succeeds = false;
+  EXPECT_FALSE(buzzer.startLowBattery());
+  EXPECT_FALSE(output_attached);
+  EXPECT_EQ(output_level, GetParam() ? HIGH : LOW);
+  EXPECT_FALSE(buzzer.beep());
+  setup_succeeds = true;
+  ASSERT_TRUE(buzzer.begin());
+  ASSERT_TRUE(buzzer.beep());
+  EXPECT_TRUE(output_attached);
 }
 
 TEST_P(AlarmBuzzerPolarity, BatteryCancellationPreservesSosPriority) {
@@ -188,9 +229,11 @@ INSTANTIATE_TEST_SUITE_P(BothPolarities, AlarmBuzzerPolarity, testing::Bool());
 TEST(AlarmBuzzerDefault, UsesCompiledPolarity) {
   setup_succeeds = true;
   output_events.clear();
+  output_attached = false;
   AlarmBuzzer buzzer;
   EXPECT_EQ(buzzer.isEnabled(), HealthNodeConfig::buzzer_enabled);
   ASSERT_TRUE(buzzer.begin());
+  EXPECT_FALSE(output_attached);
   if (HealthNodeConfig::buzzer_enabled) {
     EXPECT_EQ(output_level, HealthNodeConfig::buzzer_active_low ? HIGH : LOW);
     EXPECT_EQ(output_duty, HealthNodeConfig::buzzer_active_low ? 255u : 0u);

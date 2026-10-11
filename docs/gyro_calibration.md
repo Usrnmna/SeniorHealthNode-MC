@@ -232,6 +232,14 @@ them. Automatic calibration at every boot is not performed.
 
 ## Verification
 
+`motion stats` and `motion stats raw` provide corrected and uncorrected
+fresh-sample aggregates. Applying saved coefficients or resetting to zero
+correction clears motion/timing aggregates with `reset=calibration-changed`;
+sensor error counters and since-startup health gap counters remain intact.
+Use `motion stats reset` before a comparison interval. See the
+[statistics reference](usb_cli_reference.md#health-and-motion-inspection) for
+units, sample counts and reset behavior.
+
 Host tests in
 [`test_gyro_calibration.cpp`](../test/test_gyro_calibration/test_gyro_calibration.cpp)
 exercise arbitrary orientations, independent validation, movement/noise/temperature

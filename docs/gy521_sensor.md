@@ -41,21 +41,30 @@ sensor data and is unavailable during active fall/help incidents.
 
 The buzzer is optional. With `buzzer_enabled = true` (default), its signal is
 **GPIO47**, using ESP32 LEDC channel 0 at
-**2000 Hz, 50% duty** while sounding. `buzzer_active_low = true` defaults to a
-LOW-level-trigger driver: initialization sets GPIO47 HIGH before enabling output
-and attaching PWM, and silent periods hold it HIGH. The GY-521 remains on GPIO4/6
+**2000 Hz, 50% duty** for ordinary beeps and SOS. `buzzer_active_low = false`
+selects LOW during silence: initialization sets GPIO47 LOW before enabling output,
+and PWM connects only during tones. The GY-521 remains on GPIO4/6
 and PRG remains on GPIO0.
 GPIO47 is listed on header J2 in the [Heltec V4 datasheet, pin description](https://resource.heltec.cn/download/WiFi_LoRa_32_V4/datasheet/WiFi_LoRa_32_V4.2.0.pdf)
 and has no other assignment in this firmware's V4 OLED configuration.
 
-Use an **external passive buzzer with a 3.3 V logic-compatible transistor driver**:
+The [DIYables passive buzzer module](https://diyables.io/products/passive-buzzer-module)
+requires PWM and supports a 3.3-5 V supply. Its onboard transistor driver permits
+the following connections, using a 3.3 V supply for this ESP32-S3 configuration:
 
 | Connection | Destination |
 | --- | --- |
-| GPIO47 | Driver/module signal input; 50% PWM for sound, HIGH for silence with the default active-low setting |
-| GND | Driver and buzzer supply common ground |
-| Driver/buzzer supply | Supply rated for the selected buzzer and driver |
-| Driver output | Passive buzzer, following the driver's polarity/wiring |
+| GPIO47 | Module I/O; 50% PWM for sound, LOW for silence with the default setting |
+| 3V3 | Module VCC |
+| GND | Module GND |
+
+The [ESP32-S3 tutorial](https://newbiely.com/tutorials/esp32-s3/esp32-s3-piezo-buzzer)
+uses GPIO42 as an example; this firmware retains GPIO47 because GPIO42 is assigned
+to optional GPS reset. The [Arduino piezo tutorial](https://arduinogetstarted.com/tutorials/arduino-piezo-buzzer#content_about_piezo_buzzer)
+also describes frequency-controlled square waves and `tone()`/`noTone()` playback.
+The firmware implements equivalent tone/silence intervals through ESP32 LEDC and
+the existing nonblocking state machine. No melody, blocking delay, or additional
+buzzer library is required. The module needs no additional external transistor.
 
 For a discrete low-side NPN driver, **set `buzzer_active_low = false`**, then
 connect GPIO47 through a base resistor,
@@ -68,7 +77,7 @@ buzzer or an 8 Î© speaker directly from the GPIO; a speaker needs a suitable
 amplifier. This configuration assumes a passive transducer, not a self-oscillating
 active buzzer. A three-pin module with its own compatible driver takes GPIO47
 at its signal input; the module already contains the buzzer-driving circuit.
-No specific buzzer model has been bench-tested here.
+Electrical operation and acoustic output remain subject to bench validation.
 
 Edit [`include/HealthNodeConfig.h`](../include/HealthNodeConfig.h) for the pin,
 output enable, trigger polarity, PWM channel/frequency, beep length, SOS timing, button timing
@@ -114,25 +123,26 @@ remain sensor diagnostics and are not suppressed by disabling the buzzer.
 The setting is beside `buzzer_pin` at the top of `HealthNodeConfig.h`:
 
 ```cpp
-constexpr bool buzzer_active_low = true;
+constexpr bool buzzer_active_low = false;
 ```
 
 | Setting | Matching driver | Silent GPIO47 level | Sounding output |
 | --- | --- | --- | --- |
-| `true` (default) | Module marked "Low Level Trigger" | HIGH | 50% PWM |
-| `false` | HIGH-active driver, including the discrete NPN circuit above | LOW | 50% PWM |
+| `false` (default) | Selected DIYables PWM configuration; also suitable for the discrete NPN circuit above | LOW | 50% PWM |
+| `true` | Alternative driver requiring HIGH during silence | HIGH | 50% PWM |
 
-The active-low default corresponds to the PCB marking "Buzzer Module Low Level
-Trigger". The associated product references are the
-[DIYables passive module](https://diyables.io/products/passive-buzzer-module) and
-[Amazon product ID B0DHGP95K4](https://www.amazon.com/dp/B0DHGP95K4).
-The marking identifies the intended input polarity; electrical operation remains
-subject to bench validation.
+The linked product and tutorials specify PWM operation but do not explicitly
+specify the module's inactive input polarity. LOW idle is the selected firmware
+configuration; it is not a bench-verified electrical specification.
 
 Polarity applies to startup, ordinary beep completion, SOS gaps and cancellation,
 battery-tone gaps and cancellation, and the inactive interval used when changing
-frequency. With 8-bit LEDC, the driver uses duty 255 for constant HIGH or 0 for
-constant LOW; sounding still uses duty 128. Frequencies, durations, alarm priority,
+frequency. At tone completion, LEDC first applies inactive duty (255 for HIGH or
+0 for LOW), then disconnects from GPIO47; the GPIO holds the selected idle level.
+Sounding uses duty 128 at 8-bit resolution. Repeated idle polls perform no GPIO
+or PWM operations. Frequency setup occurs only when the next tone needs a different
+pitch; a setup failure leaves the output disconnected and inactive.
+Frequencies, durations, alarm priority,
 PRG gestures and channel messages are unchanged by this setting.
 
 **An incorrect setting holds the driver active during intended silence.** Using
@@ -169,7 +179,8 @@ alarm_buzzer.beep();     // Default 150 ms; returns immediately.
 `setup()` calls `alarm_buzzer.begin()` once. `MyMesh::pollFallResponse()` services
 `alarm_buzzer.loop()` every loop; callers must not add delays or their own busy
 loops. The API also supplies `startSOS()` and `stop()` for the fall-response owner.
-`beep()` returns false if output is disabled, PWM initialization failed, or an SOS/battery sequence is active. The
+`beep()` returns false if output is disabled, PWM initialization or frequency setup
+failed, or an SOS/battery sequence is active. The
 USB serial command `beep` tests just the sound without creating a
 fall event or sending a channel acknowledgement.
 

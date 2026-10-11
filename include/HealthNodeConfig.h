@@ -4,14 +4,18 @@
 // EDIT HERE, then rebuild heltec_v4_companion_radio_ble. No alarm state is saved to flash.
 // Channel selection can override the defaults below via USB/BLE: set fall.channel.
 namespace HealthNodeConfig {
-// External passive buzzer via a 3.3 V-compatible driver; GPIO is a signal only.
+// DIYables passive module: VCC=3V3, GND=GND, I/O=buzzer_pin; onboard driver.
+// https://diyables.io/products/passive-buzzer-module
+// GPIO supplies PWM only during tones; silent gaps disconnect PWM and set idle level.
 // Optional output: false skips all buzzer GPIO/PWM setup and playback.
 // Sensor monitoring, PRG responses and channel alerts remain enabled without a buzzer.
 constexpr bool buzzer_enabled = true;
 constexpr int buzzer_pin = 47;          // Free header GPIO on the V4 OLED target.
 // true: LOW-level-trigger module (silent HIGH). false: HIGH-active driver (silent LOW).
+// LOW idle is selected for the DIYables PWM configuration. The product/tutorial
+// specifies PWM but not idle polarity; electrical behavior requires bench validation.
 // Match the driver hardware, then rebuild and flash; wrong polarity energizes idle periods.
-constexpr bool buzzer_active_low = true;
+constexpr bool buzzer_active_low = false;
 constexpr uint8_t buzzer_pwm_channel = 0; // Reserved ESP32 LEDC channel (Arduino 2.x).
 constexpr uint32_t buzzer_frequency_hz = 2000;
 constexpr uint32_t beep_ms = 150;

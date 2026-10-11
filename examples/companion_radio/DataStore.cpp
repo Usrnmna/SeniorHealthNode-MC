@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "DataStore.h"
+#include "PreferenceStore.h"
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -190,6 +191,13 @@ bool DataStore::saveMainIdentity(const mesh::LocalIdentity &identity) {
 }
 
 void DataStore::loadPrefs(NodePrefs& prefs) {
+#ifdef ESP32
+  if (!_fs->exists("/prefs.json") && _fs->exists("/prefs.bak")) {
+    File backup = openRead(_fs, "/prefs.bak");
+    if (backup) { prefs.loadSerial(backup); backup.close(); }
+    return;
+  }
+#endif
   if (_fs->exists("/prefs.json")) {
     File file = openRead(_fs, "/prefs.json");
     if (file) {
@@ -247,6 +255,9 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
 }
 
 bool DataStore::savePrefs(NodePrefs& _prefs) {
+#ifdef ESP32
+  return PreferenceStore::save(*_fs, _prefs);
+#else
   File file = openWrite(_fs, "/prefs.json");
   if (file) {
     bool success = _prefs.saveSerial(file);
@@ -254,6 +265,7 @@ bool DataStore::savePrefs(NodePrefs& _prefs) {
     return success;
   }
   return false;
+#endif
 }
 
 void DataStore::loadContacts(DataStoreHost* host) {

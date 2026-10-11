@@ -31,6 +31,14 @@ and playback after a rebuild and flash. Fall-response timing and PRG gestures
 remain active without sound. This setting does not suppress MPU6050 faults.
 See [operation without a buzzer](gy521_sensor.md#operation-without-a-buzzer).
 
+**How is the DIYables passive buzzer connected and tested?**
+Connect VCC to 3V3, GND to GND and I/O to GPIO47. The module includes its driver.
+`buzzer_active_low = false` selects LOW idle; tones use 50% PWM with nonblocking
+timing. The product references do not explicitly specify idle polarity, so
+electrical operation remains subject to bench validation. USB `beep` requests
+one 150 ms, 2000 Hz tone. Confirm silence afterward; the reply does not establish
+physical output. See [wiring and polarity](gy521_sensor.md#buzzer-trigger-polarity).
+
 **Does gyroscope calibration require horizontal or vertical mounting?**
 No. Any fixed orientation is valid. USB `calibrate` starts a countdown,
 15-second stationary measurement and independent validation. `calibrate save`
