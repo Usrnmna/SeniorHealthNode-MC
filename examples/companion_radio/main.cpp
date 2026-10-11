@@ -247,6 +247,7 @@ void setup() {
 #if ENV_INCLUDE_MPU6050
   pinMode(PIN_USER_BTN, INPUT_PULLUP);
   if (!alarm_buzzer.begin()) Serial.println("Buzzer PWM initialization failed");
+  else if (!alarm_buzzer.isEnabled()) Serial.println("Buzzer disabled; monitoring and channel alerts remain active");
   if (HealthNodeConfig::charging_status_pin >= 0)
     pinMode(HealthNodeConfig::charging_status_pin,
             HealthNodeConfig::charging_status_active_low ? INPUT_PULLUP : INPUT_PULLDOWN);

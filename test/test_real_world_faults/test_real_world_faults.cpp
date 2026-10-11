@@ -24,7 +24,7 @@ struct FaultRig {
   uint32_t now;
   unsigned falls = 0;
   float acceleration = 1, rotation = 0;
-  int read_length = 14;
+  int read_length = 15;
   uint8_t identity = 0x68;
   bool pressed = false;
 
@@ -32,12 +32,14 @@ struct FaultRig {
     Wire1 = TwoWire{};
     Wire1.response = [this](uint8_t reg, uint8_t count) {
       if (reg == 0x75) return std::vector<uint8_t>{identity};
-      std::vector<uint8_t> bytes(14, 0);
+      if (count == 1) return std::vector<uint8_t>{Wire1.registers[reg]};
+      std::vector<uint8_t> bytes(15, 0);
+      bytes[0] = 1; // DATA_RDY_INT; each rig tick represents a new sensor update.
       auto word = [&](unsigned offset, int16_t value) {
         bytes[offset] = uint16_t(value) >> 8; bytes[offset + 1] = uint8_t(value);
       };
-      word(4, int16_t(acceleration * 4096));
-      word(8, int16_t(rotation * 65.5f));
+      word(5, int16_t(acceleration * 4096));
+      word(9, int16_t(rotation * 65.5f));
       bytes.resize(read_length);
       return bytes;
     };
@@ -83,11 +85,11 @@ TEST_P(ShortMpuRead, CancelsConfirmationThenRecoversForANewFall) {
   FaultRig r; r.quiet(120); r.sample(.3f); r.sample(3, 300); r.quiet(20);
   r.read_length = GetParam(); r.tick();
   EXPECT_FALSE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
-  r.read_length = 14; r.quiet(160);
+  r.read_length = 15; r.quiet(160);
   EXPECT_EQ(r.falls, 0u); EXPECT_FALSE(r.response.alarmActive());
   r.fall(); EXPECT_EQ(r.falls, 1u); EXPECT_TRUE(r.buzzer.alarmActive());
 }
-INSTANTIATE_TEST_SUITE_P(AllTruncatedLengths, ShortMpuRead, ::testing::Range(0, 14));
+INSTANTIATE_TEST_SUITE_P(AllTruncatedLengths, ShortMpuRead, ::testing::Range(0, 15));
 
 class LoopStall : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(LoopStall, CannotJoinFallEvidenceAcrossMissingTime) {
@@ -104,7 +106,7 @@ TEST_P(FaultStage, DisconnectNeverCompletesAnOldCandidate) {
   if (GetParam() >= 2) { r.sample(3, 300); r.quiet(20); }
   r.read_length = 0; r.identity = 0;
   r.quiet(400); EXPECT_FALSE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
-  r.read_length = 14; r.identity = 0x68;
+  r.read_length = 15; r.identity = 0x68;
   r.quiet(400); EXPECT_TRUE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
   r.fall(); EXPECT_EQ(r.falls, 1u);
 }
@@ -126,17 +128,17 @@ TEST(RealWorldFaults, ConfigurationWriteFailureRecoversAfterBackoff) {
 TEST(RealWorldFaults, AlternatingReadFailuresNeverAccumulateQuietEvidence) {
   FaultRig r;
   for (unsigned i = 0; i < 3000; ++i) {
-    r.read_length = (i % 2) ? 14 : 0; r.sample(i % 7 == 0 ? .3f : 1);
+    r.read_length = (i % 2) ? 15 : 0; r.sample(i % 7 == 0 ? .3f : 1);
   }
   EXPECT_EQ(r.falls, 0u);
-  r.read_length = 14; r.quiet(400); r.fall(); EXPECT_EQ(r.falls, 1u);
+  r.read_length = 15; r.quiet(400); r.fall(); EXPECT_EQ(r.falls, 1u);
 }
 
 TEST(RealWorldFaults, DisconnectDuringSosPreservesAlarmAndCooldown) {
   FaultRig r; r.quiet(120); r.fall(); ASSERT_EQ(r.falls, 1u);
   r.read_length = 0; r.identity = 0; r.quiet(300);
   EXPECT_TRUE(r.response.alarmActive()); EXPECT_TRUE(r.buzzer.alarmActive());
-  r.read_length = 14; r.identity = 0x68; r.quiet(400); r.fall();
+  r.read_length = 15; r.identity = 0x68; r.quiet(400); r.fall();
   EXPECT_EQ(r.falls, 1u); // Reconnection must not bypass the 60-second cooldown.
   r.quiet(3100); r.fall();
   EXPECT_EQ(r.falls, 2u); EXPECT_TRUE(r.buzzer.alarmActive());
@@ -250,7 +252,7 @@ TEST(RealWorldFaults, JitteredHourOfOrdinaryMotionThenFallRemainsResponsive) {
     const uint32_t step = 20 + random % 31; elapsed += step;
     // Reproducible bounded ordinary movement, not a recorded human dataset.
     r.sample(.75f + (random % 50) / 100.f, float(random % 25), step);
-    if (random % 97 == 0) { r.read_length = 0; r.tick(); r.read_length = 14; }
+    if (random % 97 == 0) { r.read_length = 0; r.tick(); r.read_length = 15; }
     if (random % 211 == 0) r.tick(250);
   }
   EXPECT_EQ(r.falls, 0u); EXPECT_FALSE(r.buzzer.alarmActive());
@@ -308,14 +310,14 @@ TEST(RealWorldFaults, Utf8OversizePayloadLeavesDestinationAndGuardsUntouched) {
   storage.fill(0xa5);
   std::string text;
   for (unsigned i = 0; i < 60; ++i) text += u8"\u2713";
-  EXPECT_EQ(FallAckMessage::encodeWithLocation(storage.data() + 1, 0, "Node",
+  EXPECT_EQ(FallAckMessage::encodeWithLocation(storage.data() + 1, 0,
     text.c_str(), false, 0, 0, "HOME"), 0u);
   for (auto byte : storage) EXPECT_EQ(byte, 0xa5);
-  auto size = FallAckMessage::encodeWithLocation(storage.data() + 1, 0, "Node",
+  auto size = FallAckMessage::encodeWithLocation(storage.data() + 1, 0,
     u8"\u2713 Help", true, -90, -180, "HOME");
   ASSERT_GT(size, 0u); EXPECT_EQ(storage.front(), 0xa5); EXPECT_EQ(storage.back(), 0xa5);
   EXPECT_EQ(std::string(reinterpret_cast<char*>(storage.data() + 6), size - 5),
-    u8"Node: \u2713 Help | lat=-90.000000, lon=-180.000000");
+    u8"\u2713 Help | lat=-90.000000, lon=-180.000000");
 }
 
 
@@ -339,9 +341,9 @@ TEST(RealWorldFaults, NegativeSensorAxesStillDetectMagnitudesAcrossClockWrap) {
 
 TEST(RealWorldFaults, OversizedSensorResponseIsRejectedWithoutReusingOldValues) {
   FaultRig r; r.quiet(120); r.sample(.3f);
-  r.read_length = 15; r.sample(3, 300);
+  r.read_length = 16; r.sample(3, 300);
   EXPECT_FALSE(r.sensor.valid);
-  r.read_length = 14; r.quiet(160); EXPECT_EQ(r.falls, 0u);
+  r.read_length = 15; r.quiet(160); EXPECT_EQ(r.falls, 0u);
   r.fall(); EXPECT_EQ(r.falls, 1u);
 }
 

@@ -7,7 +7,7 @@
 // Queued transfers ownership to Dispatcher; it never means delivered.
 namespace FallAckSender {
 // Called from Mesh's pre-dedup flood hook. A nonzero route shows forwarding;
-// exact encrypted-payload hash matching ties the repeat to our actual message.
+// exact encrypted-payload hash matching associates the repeat with the transmitted message.
 inline bool observeRepeat(const mesh::Packet& packet, AssistanceDelivery& delivery) {
   if (!packet.isRouteFlood() || packet.getPayloadType() != PAYLOAD_TYPE_GRP_TXT ||
       packet.getPathHashCount() == 0) return false;

@@ -89,6 +89,7 @@ struct AdvertPath {
 #include "health/FallResponse.h"
 #include "health/LowBatteryAlert.h"
 #include "health/MotionHealth.h"
+#include <helpers/GyroCalibration.h>
 #include "health/AssistanceDelivery.h"
 #include "health/FallNoticeOutbox.h"
 #endif
@@ -107,6 +108,9 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
   FallNoticeOutbox fall_notices;
   MotionHealth motion_health{FallDetectionConfig{}.max_sample_gap_ms, HealthNodeConfig::motion_fault_timeout_ms};
   bool last_motion_fault = false;
+  GyroCalibration gyro_calibration;
+  uint32_t calibration_reported_at = 0;
+  GyroCalibration::State calibration_reported_state = GyroCalibration::Idle;
   AssistanceDelivery::State reported_help = AssistanceDelivery::Idle;
   AssistanceDelivery::State reported_fall = AssistanceDelivery::Idle;
 
@@ -114,6 +118,8 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
   void onPacketTxComplete(uint32_t tag, bool sent) override;
   bool handleHealthCommand(const char* command, char* reply);
   uint8_t setFallChannel(const char* value);
+  bool calibrationIncidentBusy() const;
+  uint8_t controlCalibration(const char* action, char* reply);
 public:
   uint32_t uniqueTimestamp() override;
   AssistanceTransport::Result queueAssistance(const uint8_t* data, unsigned len,

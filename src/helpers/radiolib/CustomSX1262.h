@@ -118,7 +118,7 @@ class CustomSX1262 : public SX1262 {
         return false;
       }
       if (!header && _headerSeen) {
-        // something cleared the header flag, reset our state.
+        // Reset reception state after the header flag is cleared.
         _activityAt = 0; _headerSeen = false;
         return false;
       }

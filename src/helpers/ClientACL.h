@@ -19,10 +19,10 @@ struct ClientInfo {
   uint8_t out_path[MAX_PATH_SIZE];
   uint8_t shared_secret[PUB_KEY_SIZE];
   uint32_t last_timestamp;   // by THEIR clock  (transient)
-  uint32_t last_activity;    // by OUR clock    (transient)
+  uint32_t last_activity;    // according to the local clock    (transient)
   union  {
     struct {
-      uint32_t sync_since;  // sync messages SINCE this timestamp (by OUR clock)
+      uint32_t sync_since;  // sync messages SINCE this timestamp (according to the local clock)
       uint32_t pending_ack;
       uint32_t push_post_timestamp;
       unsigned long ack_timeout;

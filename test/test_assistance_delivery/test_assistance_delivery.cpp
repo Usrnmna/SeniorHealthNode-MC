@@ -133,7 +133,7 @@ protected:
   std::vector<uint8_t> text;
   void SetUp() override {
     uint8_t data[FallAckMessage::max_payload_bytes];
-    const unsigned len = FallAckMessage::encodeWithLocation(data, 0, "Node", HealthNodeConfig::ack_message,
+    const unsigned len = FallAckMessage::encodeWithLocation(data, 0, HealthNodeConfig::ack_message,
         false, 0, 0, HealthNodeConfig::DefaultLocation);
     ASSERT_GT(len, 5u);
     text.assign(data, data + len);
@@ -179,6 +179,10 @@ TEST_F(AssistanceChannel, PrivateChannelsDecryptOnlyWithMatchingKey) {
     destination = FallChannel{};
     source.step(); source.step();
     ASSERT_EQ(1u, source.radio.frames.size());
+    mesh::Packet frame;
+    ASSERT_TRUE(frame.readFrom(source.radio.frames[0].data(), source.radio.frames[0].size()));
+    EXPECT_EQ(PAYLOAD_TYPE_GRP_TXT, frame.getPayloadType());
+    EXPECT_TRUE(frame.isRouteFlood());
     matching.radio.inbound.push_back(source.radio.frames.front()); matching.step();
     wrong.radio.inbound.push_back(source.radio.frames.front()); wrong.step();
     ASSERT_EQ(1u, matching.mesh.plaintexts.size());
@@ -495,53 +499,151 @@ static std::string decodedText(const std::vector<uint8_t>& bytes) {
   return std::string(reinterpret_cast<const char*>(bytes.data() + 5), end - 5);
 }
 
+// Verify the wire contract at the encrypted group-channel boundary for every
+// fall message. Public/private selection must never turn an alert into a DM.
+TEST(ProductionCrypto, AllFallMessagesRemainNamelessGroupTextsOnPublicAndPrivateChannels) {
+  FallNoticeMessage::Bundle initial;
+  initial.length[0] = FallAckMessage::encode(initial.payload[0], 0,
+      "Possible fall: peak accel=2.80g rotation=260.0deg/s");
+  initial.count = 1;
+  struct MessageCase { FallNoticeMessage::Bundle message; const char* expected; };
+  const MessageCase cases[] = {
+    {initial, "Possible fall: peak accel=2.80g rotation=260.0deg/s"},
+    {FallNoticeMessage::build(FallNotice::AssistanceRequested, true, 37.123456, -122.654321),
+     "Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-122.654321"},
+    {FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, false, 0, 0),
+     "Fall Detected & User Has Requested Assistance | HOME | USER COULD NOT CONFIRM THEIR CONDITION"},
+    {FallNoticeMessage::build(FallNotice::NoResidualMovement, true, -90, -180),
+     "Fall Detected & User Has Requested Assistance | lat=-90.000000, lon=-180.000000 | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER"},
+    {FallNoticeMessage::build(FallNotice::UserConfirmedFall, true, 1, 2),
+     "USER HAS CONFIRMED FALL"},
+    {FallNoticeMessage::build(FallNotice::UserConfirmedFalseAlarm, true, 37.123456, -122.654321),
+     "User Confirms False Alarm | lat=37.123456, lon=-122.654321"},
+    {FallNoticeMessage::build(FallNotice::UserConfirmedFalseAlarm, false, 0, 0),
+     "User Confirms False Alarm | HOME"}
+  };
+  for (const char* channel : {"public #falldetect",
+       "private CareGroup 00112233445566778899AABBCCDDEEFF"}) {
+    FallChannel destination;
+    ASSERT_TRUE(FallChannel::parse(channel, destination));
+    for (const auto& item : cases) {
+      SCOPED_TRACE(channel);
+      SCOPED_TRACE(item.expected);
+      ASSERT_EQ(1u, item.message.count);
+      ChannelNode source, receiver;
+      memcpy(receiver.mesh.channel.secret, destination.key, 32);
+      mesh::Utils::sha256(receiver.mesh.channel.hash, sizeof(receiver.mesh.channel.hash),
+                          destination.key, destination.key_length);
+      ASSERT_TRUE(source.mesh.delivery.begin(source.clock.now, source.mesh,
+          item.message.payload[0], item.message.length[0], destination));
+      source.step(); source.step();
+      ASSERT_EQ(1u, source.radio.frames.size());
+      const auto& bytes = source.radio.frames[0];
+      mesh::Packet frame;
+      ASSERT_TRUE(frame.readFrom(bytes.data(), bytes.size()));
+      EXPECT_EQ(PAYLOAD_TYPE_GRP_TXT, frame.getPayloadType());
+      EXPECT_TRUE(frame.isRouteFlood());
+      receiver.radio.inbound.push_back(bytes); receiver.step();
+      ASSERT_EQ(1u, receiver.mesh.plaintexts.size());
+      EXPECT_EQ(item.expected, decodedText(receiver.mesh.plaintexts[0]));
+    }
+  }
+}
+
 TEST_F(AssistanceChannel, AutomaticWarningDecryptsWithExactAppendedText) {
   sender.mesh.use_notices = true;
-  const auto m = FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, "Node", false, 0, 0);
+  const auto m = FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, false, 0, 0);
   ASSERT_TRUE(sender.mesh.notices.enqueue(FallNotice::UserCouldNotConfirm, 1, m));
   finishLocal(); deliver(sender.radio.frames[0]);
   ASSERT_EQ(1u, receiver.mesh.plaintexts.size());
   const auto& bytes = receiver.mesh.plaintexts[0];
-  EXPECT_EQ("Node: Fall Detected & User Has Requested Assistance | HOME | USER COULD NOT CONFIRM THEIR CONDITION",
+  EXPECT_EQ("Fall Detected & User Has Requested Assistance | HOME | USER COULD NOT CONFIRM THEIR CONDITION",
       decodedText(bytes));
 }
 
 TEST_F(AssistanceChannel, ConfirmationCancelsActualQueuedWarningDuringBusyRadio) {
   sender.mesh.use_notices = true; sender.radio.busy = true;
   sender.mesh.notices.enqueue(FallNotice::NoResidualMovement, 1,
-      FallNoticeMessage::build(FallNotice::NoResidualMovement, "Node", false, 0, 0));
+      FallNoticeMessage::build(FallNotice::NoResidualMovement, false, 0, 0));
   sender.step(); ASSERT_EQ(AssistanceDelivery::Queued, sender.mesh.delivery.state());
   sender.mesh.notices.enqueue(FallNotice::UserConfirmedFall, 1,
-      FallNoticeMessage::build(FallNotice::UserConfirmedFall, "Node", false, 0, 0));
+      FallNoticeMessage::build(FallNotice::UserConfirmedFall, false, 0, 0));
   sender.step(); EXPECT_EQ(1u, sender.mesh.callbacks); EXPECT_TRUE(sender.radio.frames.empty());
   sender.radio.busy = false; sender.step(2000); sender.step(); // Allow CAD backoff to expire.
   ASSERT_EQ(1u, sender.radio.frames.size()); deliver(sender.radio.frames[0]);
   ASSERT_EQ(1u, receiver.mesh.plaintexts.size()); const auto& bytes = receiver.mesh.plaintexts[0];
-  EXPECT_EQ("Node: USER HAS CONFIRMED FALL",
+  EXPECT_EQ("USER HAS CONFIRMED FALL",
       decodedText(bytes));
 }
 
 TEST_F(AssistanceChannel, InFlightAutomaticWarningFinishesBeforeConfirmation) {
   sender.mesh.use_notices = true; sender.radio.completes = false;
   sender.mesh.notices.enqueue(FallNotice::UserCouldNotConfirm, 1,
-      FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, "Node", false, 0, 0));
+      FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, false, 0, 0));
   sender.step(); ASSERT_EQ(1u, sender.radio.frames.size());
   sender.mesh.notices.enqueue(FallNotice::UserConfirmedFall, 1,
-      FallNoticeMessage::build(FallNotice::UserConfirmedFall, "Node", false, 0, 0));
+      FallNoticeMessage::build(FallNotice::UserConfirmedFall, false, 0, 0));
   sender.step(); EXPECT_EQ(0u, sender.mesh.callbacks); EXPECT_EQ(1u, sender.radio.frames.size());
   sender.radio.completes = true;
   for (unsigned i = 0; i < 8; ++i) sender.step();
   ASSERT_EQ(2u, sender.radio.frames.size()); EXPECT_EQ(2u, sender.mesh.callbacks);
   deliver(sender.radio.frames[0]); deliver(sender.radio.frames[1]);
   ASSERT_EQ(2u, receiver.mesh.plaintexts.size()); const auto& bytes = receiver.mesh.plaintexts[1];
-  EXPECT_EQ("Node: USER HAS CONFIRMED FALL",
+  EXPECT_EQ("USER HAS CONFIRMED FALL",
       decodedText(bytes));
+}
+
+TEST_F(AssistanceChannel, FalseAlarmCancelsBothQueuedStreamsBeforeSendingCorrection) {
+  sender.mesh.use_notices = true; sender.radio.busy = true;
+  uint8_t initial[FallAckMessage::max_payload_bytes];
+  const auto len = FallAckMessage::encode(initial, 0, "Possible fall");
+  ASSERT_TRUE(sender.mesh.other_delivery.begin(sender.clock.now, sender.mesh, initial, len, FallChannel{}, 1));
+  sender.mesh.notices.enqueue(FallNotice::NoResidualMovement, 1,
+      FallNoticeMessage::build(FallNotice::NoResidualMovement, false, 0, 0));
+  sender.step(); ASSERT_EQ(AssistanceDelivery::Queued, sender.mesh.other_delivery.state());
+  ASSERT_EQ(AssistanceDelivery::Queued, sender.mesh.delivery.state());
+  EXPECT_TRUE(sender.mesh.other_delivery.supersedeIncident(sender.mesh, 1));
+  sender.mesh.notices.cancelWarnings(1, sender.mesh, sender.mesh.delivery);
+  ASSERT_TRUE(sender.mesh.notices.enqueue(FallNotice::UserConfirmedFalseAlarm, 1,
+      FallNoticeMessage::build(FallNotice::UserConfirmedFalseAlarm, false, 0, 0)));
+  EXPECT_EQ(2u, sender.mesh.callbacks); EXPECT_TRUE(sender.radio.frames.empty());
+  sender.radio.busy = false; sender.step(2000); sender.step();
+  ASSERT_EQ(1u, sender.radio.frames.size()); deliver(sender.radio.frames[0]);
+  ASSERT_EQ(1u, receiver.mesh.plaintexts.size());
+  EXPECT_EQ("User Confirms False Alarm | HOME", decodedText(receiver.mesh.plaintexts[0]));
+  EXPECT_FALSE(sender.mesh.other_delivery.busy());
+}
+
+TEST_F(AssistanceChannel, FalseAlarmAllowsInFlightInitialAlertToFinishWithoutRetryingIt) {
+  sender.mesh.use_notices = true; sender.radio.completes = false;
+  uint8_t initial[FallAckMessage::max_payload_bytes];
+  const auto len = FallAckMessage::encode(initial, 0, "Possible fall");
+  ASSERT_TRUE(sender.mesh.other_delivery.begin(sender.clock.now, sender.mesh, initial, len, FallChannel{}, 1));
+  sender.step(); ASSERT_EQ(1u, sender.radio.frames.size());
+  EXPECT_TRUE(sender.mesh.other_delivery.supersedeIncident(sender.mesh, 1));
+  ASSERT_TRUE(sender.mesh.notices.enqueue(FallNotice::UserConfirmedFalseAlarm, 1,
+      FallNoticeMessage::build(FallNotice::UserConfirmedFalseAlarm, false, 0, 0)));
+  sender.step(); EXPECT_EQ(0u, sender.mesh.callbacks);
+  sender.radio.completes = true;
+  for (unsigned i = 0; i < 8; ++i) sender.step();
+  ASSERT_EQ(2u, sender.radio.frames.size());
+  deliver(sender.radio.frames[0]); deliver(sender.radio.frames[1]);
+  ASSERT_EQ(2u, receiver.mesh.plaintexts.size());
+  EXPECT_EQ("Possible fall", decodedText(receiver.mesh.plaintexts[0]));
+  EXPECT_EQ("User Confirms False Alarm | HOME", decodedText(receiver.mesh.plaintexts[1]));
+  sender.step(20000); sender.step();
+  EXPECT_FALSE(sender.mesh.other_delivery.busy());
+  // Any additional frame is a bounded retry of the correction, not the old alert.
+  for (size_t i = 2; i < sender.radio.frames.size(); ++i) {
+    deliver(sender.radio.frames[i]);
+    EXPECT_EQ("User Confirms False Alarm | HOME", decodedText(receiver.mesh.plaintexts.back()));
+  }
 }
 
 TEST_F(AssistanceChannel, MultipartWarningPreservesAllTextThroughRealEncryption) {
   sender.mesh.use_notices = true; receiver.mesh.forward = true;
-  const std::string name(31, 'N');
-  const auto m = FallNoticeMessage::build(FallNotice::NoResidualMovement, name.c_str(), true, -90, -180);
+  const std::string location(70, 'L');
+  const auto m = FallNoticeMessage::build(FallNotice::NoResidualMovement, false, 0, 0, location.c_str());
   ASSERT_EQ(2u, m.count);
   sender.mesh.notices.enqueue(FallNotice::NoResidualMovement, 1, m);
   for (unsigned part = 0; part < 2; ++part) {

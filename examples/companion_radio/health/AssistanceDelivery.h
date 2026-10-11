@@ -31,9 +31,17 @@ public:
     state_code = Idle; failure_code = None;
     if (old_tag) link.cancelAssistance(old_tag);
   }
+  // Initial fall alerts can outlive their local alarm. A false-alarm response
+  // may retire only the alert owned by that same incident, never another one.
+  bool supersedeIncident(AssistanceTransport& link, uint32_t incident) {
+    if (incident_id != incident) return false;
+    supersede(link);
+    return true;
+  }
   bool begin(uint32_t now, AssistanceTransport&, const uint8_t* payload, unsigned len,
-             const FallChannel& channel = FallChannel{}) {
+             const FallChannel& channel = FallChannel{}, uint32_t incident = 0) {
     if (busy()) return false; // Coalesce without resetting an existing retry budget.
+    incident_id = incident;
     attempts = transmissions = fingerprint_count = 0;
     attempted = false; failure_code = None; active_tag = 0; changed_at = now;
     if (len < 5 || len > sizeof(body) || !channel.valid()) {
@@ -117,6 +125,7 @@ private:
   uint8_t fingerprints[HealthNodeConfig::ack_max_attempts][8] = {};
   unsigned body_len = 0;
   uint32_t next_tag, active_tag = 0, changed_at = 0;
+  uint32_t incident_id = 0;
   uint8_t attempts = 0, transmissions = 0, fingerprint_count = 0;
   bool attempted = false;
   State state_code = Idle;

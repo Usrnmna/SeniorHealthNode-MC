@@ -17,10 +17,11 @@ From the project root, use the existing verification entry point:
 .\verify.ps1
 ```
 
-In a worktree without its own Python/compiler installation, pass existing tools:
+In a worktree without its own Python/compiler installation, pass existing tools.
+Replace the placeholders with the Python executable and compiler directory:
 
 ```powershell
-.\verify.ps1 -Python C:\Users\usrnm\SeniorHealthNode-MC\.venv\Scripts\python.exe -CompilerBin C:\Users\usrnm\SeniorHealthNode-MC\.pio\tools\mingw64\bin
+.\verify.ps1 -Python '<python-executable>' -CompilerBin '<compiler-bin-directory>'
 ```
 
 The builds, dependencies, and tests still use this worktree. Only Python and the
@@ -31,11 +32,35 @@ compiler available on PATH, run:
 python -m platformio test -e native -f test_real_world_faults
 ```
 
+For buzzer polarity, run `python -m platformio test -e native -f test_alarm_buzzer`.
+This suite calls the production `AlarmBuzzer` with both trigger polarities and
+records GPIO/LEDC requests for inactive initialization, failed initialization,
+beep completion, SOS gaps/stopping, battery pitch changes and cancellation, and
+SOS priority. It also checks the default instance against the compiled setting.
+Disabled-output cases check that playback requests make no GPIO-level or LEDC
+calls, while the production fall-response state machine still escalates at its
+deadline and accepts the PRG confirmation gesture. These cases do not run the
+complete BLE companion loop or establish physical disconnected-module behavior.
+These host fakes verify requested levels/duties, not physical PWM waveforms,
+reset transients, module current draw or audible output.
+
 ## Scenario examples
+
+For stationary gyroscope calibration, run
+`python -m platformio test -e native -f test_gyro_calibration -f test_sensor_timing`.
+The suite exercises arbitrary stationary orientations, independent validation,
+movement/noise/temperature rejection, fresh-data gaps, timeout and clock rollover,
+pending-result expiration, corrupted/interrupted storage and correction without
+removing gravity or overwriting raw measurements. It does not run the complete
+BLE companion or prove hardware calibration accuracy. See the
+[calibration procedure](gyro_calibration.md).
 
 | Scenario family | Inputs / example | Required result |
 | --- | --- | --- |
-| Truncated MPU sample (14 cases) | Return each length 0 through 13 instead of 14 bytes midway through confirmation | Invalidate sample, cancel old evidence, detect a fresh fall after recovery |
+| Truncated MPU sample (15 cases) | Return each length 0 through 14 instead of 15 bytes midway through confirmation | Invalidate sample, cancel old evidence, detect a fresh fall after recovery |
+| MPU data-ready status | Clear flag, unrelated status bit, identical axes with a fresh flag, and prolonged missing data across clock wrap | Only fresh data reaches the detector; a stuck sensor invalidates and reinitializes |
+| MPU configuration readback | Mismatch each of eight registers; fail a read; change reserved bits | Reject mismatched relevant bits and bus failures; ignore reserved bits; recover after retry |
+| Battery calibration | Meter input, stale/zero/saturated ADC data, invalid multipliers, old and new preference files | Preserve conversion arithmetic; reject invalid suggestions; round-trip the saved multiplier; absent setting selects default |
 | Cooperative loop stalls (5 cases) | Wait 101 ms, 250 ms, 1 s, 5 s, or 60 s between low acceleration and impact | Do not join evidence across missing time; recover after quiet settling |
 | Disconnection at three stages | Unplug while armed, after low acceleration, or during confirmation; remain missing through reinitialization | No stale fall; reconnect, settle, then detect a new sequence |
 | Device and configuration faults | Wrong WHO_AM_I; configuration write failure; alternating failed/successful samples for one minute | No usable motion until recovery; intermittent failures cannot accumulate quiet evidence |
@@ -43,7 +68,7 @@ python -m platformio test -e native -f test_real_world_faults
 | Oversized sample | Return 15 bytes | Reject without accepting old motion evidence |
 | Signed sensor axes / rollover | Negative acceleration and gyro axes; clock wraps during the event | Use magnitudes correctly; detect and acknowledge once |
 | Disconnect during SOS | Disconnect after an alert; reconnect before cooldown ends | Keep SOS active; preserve cooldown; later fall detection remains enabled |
-| Noisy or held PRG button | Bounce press/release edges; hold at fall onset; stall the loop during a press | Require three new valid clicks; neither bounce nor a held press silences SOS |
+| Noisy or held PRG button | Bounce press/release edges; hold at fall onset; stall the loop during a press | Require a valid post-fall gesture; neither bounce nor a held press silences SOS |
 | Sensor unavailable during acknowledgment | Disconnect sensor, then perform three bouncing-but-valid clicks | Local SOS stops and assistance request becomes pending |
 | Low battery versus SOS | 3300 mV while SOS is active | Defer battery playback without consuming reminder; start after acknowledgment |
 | Charging versus SOS | Simulated active charging input during SOS | Clear battery policy only; preserve SOS; unplugging rearms battery warning |
@@ -83,19 +108,26 @@ Reproducible combined-firmware checks are described in [build validation](build-
 The deterministic fault suite and production transport suite are both included in
 `verify.ps1`. The harness does not execute the complete companion or BLE stack.
 
-## Post-fall escalation and late-confirmation regressions
+## Post-fall escalation and fall-response regressions
 
 `python -m platformio test -e native -f test_post_fall` runs the production response,
 residual-movement, formatting and outbox logic with synthetic time and inputs.
 It covers the fixed 30-second deadline, final continuous quiet period, missing and
 invalid samples, slow vector drift, late clicks after either warning, preserved SOS,
 rollover, UTF-8 boundaries, two-part warnings, reserved confirmation capacity, stale
-callbacks and exhausted retries. Tests also enforce the absence of a leading
+callbacks and exhausted retries. False-alarm tests cover 999/1000/1001 ms double
+windows, the full three-second decision wait, third-release priority at the exact
+deadline, held/late third presses, bounce, held-at-detection input, rollover, warning
+deadline overlap, location/fallback text, backpressure and incident-scoped cancellation.
+Companion-button tests check UI suppression throughout the wait and navigation
+resuming afterward. Tests also enforce the absence of a leading
 ` | ` on standalone warning text.
 
 The `native_delivery` suite additionally sends these payloads through production
 MeshCore encryption, queues and decryption. It checks actual queued cancellation
-and safe completion of an already-started warning before confirmation. Cipher
+and safe completion of already-started alerts before confirmation. False-alarm
+cases cancel both queued message streams, preserve in-flight initial transmissions,
+and decrypt the exact correction text and location on public/private channels. Cipher
 padding and CAD backoff are handled by the test receiver/clock, not by firmware
 changes. These tests use fake radios and do not establish actual reception.
 

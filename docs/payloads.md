@@ -1,7 +1,7 @@
 # Payload Format
 
 SeniorHealthNode sends initial fall alerts, assistance, automatic warnings and
-late confirmations as ordinary group text on the selected public or private
+fall confirmations and false-alarm responses with location as ordinary group text on the selected public or private
 channel. Multipart warnings are separate ordinary messages with `[1/2]` and
 `[2/2]` text labels. No health-specific payload type is added. See
 [response text and delivery](message_delivery_changes.md#post-fall-response-directives).
@@ -240,9 +240,15 @@ txt_type
 | cipher MAC   | 2               | MAC for encrypted data in next field         |
 | ciphertext   | rest of payload | encrypted message, see below for details     |
 
-The plaintext contained in the ciphertext matches the format described in [plain text message](#plain-text-message). Specifically, it consists of a four byte timestamp, a flags byte, and the message. The flags byte will generally be `0x00` because it is a "plain text message". The message will be of the form `<sender name>: <message body>` (eg., `user123: I'm on my way`).
+The plaintext contained in the ciphertext matches the format described in [plain text message](#plain-text-message). Specifically, it consists of a four byte timestamp, a flags byte, and the message. The flags byte will generally be `0x00` because it is a "plain text message". Ordinary chat text uses the form `<sender name>: <message body>` (eg., `user123: Status update`).
 
-The sender name is unverified message text. Group messages contain no sender
+SeniorHealthNode fall notifications use the same group-text packet type and
+timestamp/flags header, but omit the sender-name prefix and its separator.
+Their text begins directly with the fall status, retaining any readings,
+location suffix, warning text, or multipart label. They remain channel group
+texts on either public or private channels; they are not direct messages.
+
+The sender name, when present, is unverified message text. Group messages contain no sender
 signature, so any channel-key holder can choose any sender name.
 
 ## Group datagram

@@ -93,10 +93,10 @@ bool LocalIdentity::validatePrivateKey(const uint8_t prv[64]) {
 
     uint8_t ss1[32], ss2[32];
 
-    // shared secret we calculte from test client pubkey and given private key
+    // Shared secret calculated from the test client public key and the supplied private key.
     ed25519_key_exchange(ss1, test_client_pub, prv);
 
-    // shared secret they calculate from our derived public key and test client private key
+    // Shared secret calculated by the test client from the derived public key and its private key.
     ed25519_key_exchange(ss2, pub, test_client_prv);
 
     // check that both shared secrets match

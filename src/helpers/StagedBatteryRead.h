@@ -27,4 +27,7 @@ public:
   }
   bool hasReading() const { return valid; }
   uint16_t rawAverage() const { return average; }
+  uint32_t readingAgeMs(uint32_t now) const {
+    return valid ? uint32_t(now - completed_at) : UINT32_MAX;
+  }
 };

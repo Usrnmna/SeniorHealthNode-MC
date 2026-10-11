@@ -17,6 +17,9 @@ void LoRaFEMControl::init(void)
     }
 
     // Auto-detect FEM type via shared GPIO2 default pull level.
+    // The V4.3 schematic connects KCT8103L CTX to GPIO5; GPIO46 CPS belongs
+    // to V4.2 GC1109 only. The V4.3.1 datasheet pin picture retains FEM_PA on
+    // GPIO46, so use the revision-specific schematic/configuration instead.
     // GC1109 CSD: internal pull-down → reads LOW
     // KCT8103L CSD: internal pull-up → reads HIGH
     rtc_gpio_hold_dis((gpio_num_t)P_LORA_KCT8103L_PA_CSD);

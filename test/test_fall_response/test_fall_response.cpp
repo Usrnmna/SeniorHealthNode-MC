@@ -13,7 +13,7 @@
 #include "../../examples/companion_radio/health/FallAckLocation.h"
 #include "../../examples/companion_radio/health/MotionRule.h"
 
-static bool click(TripleClick& button, uint32_t start, uint32_t duration = 100) {
+static bool click(FallButtonGesture& button, uint32_t start, uint32_t duration = 100) {
   EXPECT_FALSE(button.update(start, true));
   EXPECT_FALSE(button.update(start + 25, true));
   EXPECT_FALSE(button.update(start + duration, false));
@@ -27,14 +27,14 @@ static bool click(FallResponse& response, uint32_t start, uint32_t duration = 10
 }
 
 TEST(FallResponse, ThreeSeparateClicksAndReleaseRequired) {
-  TripleClick b(3000, 1000, 25); b.reset(0, false);
+  FallButtonGesture b(3000, 1000, 1000, 25); b.reset(0, false);
   EXPECT_FALSE(click(b, 100)); EXPECT_FALSE(click(b, 500));
   EXPECT_FALSE(b.update(900, true)); EXPECT_FALSE(b.update(925, true));
   EXPECT_FALSE(b.update(1000, false)); EXPECT_FALSE(b.update(1024, false));
   EXPECT_TRUE(b.update(1025, false)); EXPECT_FALSE(b.update(1050, false));
 }
 TEST(FallResponse, FirstDownToThirdUpWindowInclusive) {
-  TripleClick b(3000, 1000, 25); b.reset(0, false);
+  FallButtonGesture b(3000, 1000, 1000, 25); b.reset(0, false);
   EXPECT_FALSE(click(b, 100)); EXPECT_FALSE(click(b, 1400));
   EXPECT_TRUE(click(b, 3000)); // Final raw release at 3100; debounce ends at 3125.
   EXPECT_FALSE(click(b, 4000)); EXPECT_FALSE(click(b, 5000));
@@ -42,18 +42,18 @@ TEST(FallResponse, FirstDownToThirdUpWindowInclusive) {
 }
 TEST(FallResponse, LongPressInAnyPositionCancelsSet) {
   for (unsigned held = 0; held < 3; ++held) {
-    TripleClick b(3000, 1000, 25); b.reset(0, false);
+    FallButtonGesture b(3000, 1000, 1000, 25); b.reset(0, false);
     uint32_t now = 100;
     for (unsigned i = 0; i < 3; ++i) {
       EXPECT_FALSE(click(b, now, i == held ? 1000 : 100)); now += i == held ? 1100 : 200;
     }
   }
-  TripleClick b(5000, 1000, 25); b.reset(0, false);
+  FallButtonGesture b(5000, 1000, 1000, 25); b.reset(0, false);
   EXPECT_FALSE(click(b, 100, 999)); EXPECT_FALSE(click(b, 1200, 999));
   EXPECT_TRUE(click(b, 2300, 999));
 }
 TEST(FallResponse, BounceCannotSupplyExtraClicks) {
-  TripleClick b(3000, 1000, 25); b.reset(0, false);
+  FallButtonGesture b(3000, 1000, 1000, 25); b.reset(0, false);
   EXPECT_FALSE(b.update(100, true)); EXPECT_FALSE(b.update(110, false));
   EXPECT_FALSE(b.update(120, true)); EXPECT_FALSE(b.update(145, true));
   EXPECT_FALSE(b.update(150, false)); EXPECT_FALSE(b.update(160, true));
@@ -61,7 +61,7 @@ TEST(FallResponse, BounceCannotSupplyExtraClicks) {
   EXPECT_FALSE(click(b, 500)); EXPECT_TRUE(click(b, 900));
 }
 TEST(FallResponse, ExpiredGestureCannotReviveAfterFullTimerCycle) {
-  TripleClick b(3000, 1000, 25); b.reset(0, false);
+  FallButtonGesture b(3000, 1000, 1000, 25); b.reset(0, false);
   EXPECT_FALSE(click(b, 100)); EXPECT_FALSE(b.update(4000, false));
   // An entire millis cycle later: expired first click must not be reused.
   EXPECT_FALSE(click(b, 500)); EXPECT_FALSE(click(b, 900)); EXPECT_TRUE(click(b, 1300));
@@ -148,53 +148,53 @@ TEST(FallResponse, BeepCannotOverrideSosAndLatePollsDoNotSkipMarks) {
 }
 TEST(FallResponse, Utf8WireFormatAndByteLimit) {
   uint8_t data[FallAckMessage::max_payload_bytes] = {};
-  const auto len = FallAckMessage::encode(data, 0x12345678, "Node", u8"\u2713");
-  EXPECT_TRUE(len == 14);
+  const auto len = FallAckMessage::encode(data, 0x12345678, u8"\u2713");
+  EXPECT_TRUE(len == 8);
   EXPECT_TRUE(data[0] == 0x78 && data[1] == 0x56 && data[2] == 0x34 && data[3] == 0x12 && data[4] == 0);
-  EXPECT_TRUE(memcmp(data + 5, "Node: \xe2\x9c\x93", 9) == 0);
-  char text[160]; memset(text, 'a', sizeof(text)); text[154] = 0;
-  EXPECT_TRUE(FallAckMessage::encode(data, 0, "Node", text) == sizeof(data));
-  text[154] = 'a'; text[155] = 0;
-  EXPECT_TRUE(FallAckMessage::encode(data, 0, "Node", text) == 0);
+  EXPECT_TRUE(memcmp(data + 5, "\xe2\x9c\x93", 3) == 0);
+  char text[162]; memset(text, 'a', sizeof(text)); text[160] = 0;
+  EXPECT_TRUE(FallAckMessage::encode(data, 0, text) == sizeof(data));
+  text[160] = 'a'; text[161] = 0;
+  EXPECT_TRUE(FallAckMessage::encode(data, 0, text) == 0);
 }
 
 static void expectLocationText(bool valid, double latitude, double longitude,
                                const char* fallback, const char* expected) {
   uint8_t data[FallAckMessage::max_payload_bytes];
-  const unsigned len = FallAckMessage::encodeWithLocation(data, 1, "Node", u8"Help",
+  const unsigned len = FallAckMessage::encodeWithLocation(data, 1, u8"Help",
                                                          valid, latitude, longitude, fallback);
   EXPECT_TRUE(len == 5 + strlen(expected));
   EXPECT_TRUE(memcmp(data + 5, expected, strlen(expected)) == 0);
 }
 TEST(FallResponse, GpsLocationAppendedInDegrees) {
   expectLocationText(true, 37.123456, -122.654321, u8"HOME",
-                     "Node: Help | lat=37.123456, lon=-122.654321");
+                     "Help | lat=37.123456, lon=-122.654321");
 }
 TEST(FallResponse, NoFixUsesConfiguredUnicodeFallback) {
   expectLocationText(false, 37.123456, -122.654321, HealthNodeConfig::DefaultLocation,
-                     "Node: Help | HOME");
-  expectLocationText(false, 0, 0, u8"Maison \u00e9t\u00e9", u8"Node: Help | Maison \u00e9t\u00e9");
+                     "Help | HOME");
+  expectLocationText(false, 0, 0, u8"Maison \u00e9t\u00e9", u8"Help | Maison \u00e9t\u00e9");
 }
 TEST(FallResponse, InvalidCoordinatesUseFallback) {
-  expectLocationText(true, 90.000001, 0, "HOME", "Node: Help | HOME");
-  expectLocationText(true, -90.000001, 0, "HOME", "Node: Help | HOME");
-  expectLocationText(true, 0, 180.000001, "HOME", "Node: Help | HOME");
-  expectLocationText(true, 0, -180.000001, "HOME", "Node: Help | HOME");
-  expectLocationText(true, NAN, 0, "HOME", "Node: Help | HOME");
-  expectLocationText(true, 0, INFINITY, "HOME", "Node: Help | HOME");
+  expectLocationText(true, 90.000001, 0, "HOME", "Help | HOME");
+  expectLocationText(true, -90.000001, 0, "HOME", "Help | HOME");
+  expectLocationText(true, 0, 180.000001, "HOME", "Help | HOME");
+  expectLocationText(true, 0, -180.000001, "HOME", "Help | HOME");
+  expectLocationText(true, NAN, 0, "HOME", "Help | HOME");
+  expectLocationText(true, 0, INFINITY, "HOME", "Help | HOME");
 }
 TEST(FallResponse, GeographicBoundariesAndZeroAreValidWithFix) {
-  expectLocationText(true, -90, 180, "HOME", "Node: Help | lat=-90.000000, lon=180.000000");
-  expectLocationText(true, 0, 0, "HOME", "Node: Help | lat=0.000000, lon=0.000000");
+  expectLocationText(true, -90, 180, "HOME", "Help | lat=-90.000000, lon=180.000000");
+  expectLocationText(true, 0, 0, "HOME", "Help | lat=0.000000, lon=0.000000");
 }
 TEST(FallResponse, LocationIncludedInUtf8ByteLimit) {
   uint8_t data[FallAckMessage::max_payload_bytes];
-  char fallback[150]; memset(fallback, 'a', sizeof(fallback)); fallback[147] = 0;
-  // "Node: " + "Help | " + 147 bytes = 160.
-  EXPECT_TRUE(FallAckMessage::encodeWithLocation(data, 1, "Node", "Help", false, 0, 0, fallback) == sizeof(data));
-  fallback[147] = 'a'; fallback[148] = 0;
-  EXPECT_TRUE(FallAckMessage::encodeWithLocation(data, 1, "Node", "Help", false, 0, 0, fallback) == 0);
-  EXPECT_TRUE(FallAckMessage::encodeWithLocation(data, 1, "Node", fallback, true, 90, 180, "HOME") == 0);
+  char fallback[155]; memset(fallback, 'a', sizeof(fallback)); fallback[153] = 0;
+  // "Help | " + 153 bytes = 160; no node-name prefix consumes the text budget.
+  EXPECT_TRUE(FallAckMessage::encodeWithLocation(data, 1, "Help", false, 0, 0, fallback) == sizeof(data));
+  fallback[153] = 'a'; fallback[154] = 0;
+  EXPECT_TRUE(FallAckMessage::encodeWithLocation(data, 1, "Help", false, 0, 0, fallback) == 0);
+  EXPECT_TRUE(FallAckMessage::encodeWithLocation(data, 1, fallback, true, 90, 180, "HOME") == 0);
 }
 
 struct FakeLocationProvider {

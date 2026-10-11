@@ -12,13 +12,15 @@ It is platform-agnostic and can be used for Android, iOS, Python, JavaScript, or
 ## SeniorHealthNode extension
 
 The single `heltec_v4_companion_radio_ble` image uses the standard companion
-custom-variable frames to configure its fall-message destination. The upstream
+custom-variable frames to configure its fall-message destination and control
+stationary gyroscope calibration. The upstream
 reference date above applies to the base guide, not this project extension.
 
 | Request | Payload after command byte | Response |
 | --- | --- | --- |
-| `CMD_GET_CUSTOM_VARS` = 40 (`0x28`) | None | `RESP_CODE_CUSTOM_VARS` = 21 (`0x15`), followed by comma-separated `name:value` entries. `fall.channel` is listed first, then sensor settings that fit. |
+| `CMD_GET_CUSTOM_VARS` = 40 (`0x28`) | None | `RESP_CODE_CUSTOM_VARS` = 21 (`0x15`), followed by comma-separated `name:value` entries. `fall.channel` and `calibrate` precede sensor settings that fit. |
 | `CMD_SET_CUSTOM_VAR` = 41 (`0x29`) | UTF-8 `fall.channel:public #name` or `fall.channel:private Name <shared-key>` | Standard OK, illegal-argument or file-I/O-error frame. |
+| `CMD_SET_CUSTOM_VAR` = 41 (`0x29`) | UTF-8 `calibrate:start`, `calibrate:save`, `calibrate:cancel` or `calibrate:reset` | Standard OK, illegal-argument or file-I/O-error frame. |
 
 Reads expose `fall.channel:public #name` or `fall.channel:private Name`; they
 never return the shared key. A write may include one final NUL, but embedded NUL
@@ -31,6 +33,13 @@ messages retain the original channel. This setting is independent of ordinary
 chat channel slots and does not create a slot for the client. Fall notifications
 use existing group-text packets; no new over-the-air payload type is introduced.
 `motion`, `health` and `beep` are USB diagnostics, not custom-variable reads.
+
+`calibrate` reads return phase, elapsed phase time, sample count, restart count
+and reason. Values contain neither commas nor colons. Calibration writes share
+the USB handler and its sensor/incident guards. Start acceptance is distinct from
+validation success and explicit saving. There are no unsolicited BLE progress
+frames; clients poll enumeration. Coefficients and detailed command rejection
+messages remain available through USB. See the [calibration guide](gyro_calibration.md).
 
 ## Official Libraries
 

@@ -24,9 +24,10 @@ functions and obvious sections. Keep tunable values easy to find; explain
 non-obvious inputs, side effects, timing assumptions and failure behavior.
 Avoid complexity that makes manual inspection or adjustment harder.
 
-Use direct technical explanations. When a personal reference is useful, write
-from the human developer's first-person perspective. Document only work performed
-and evidence verified. Describe current capabilities rather than keeping dated
+Use impersonal academic language in documentation and code comments. Avoid
+first-person narration and personal attributions to an owner, developer or
+assistant. State technical behavior, assumptions and evidence directly. Document
+only work performed and evidence verified. Describe current capabilities rather than keeping dated
 change summaries or old passing-test totals in usage guides.
 
 ## Verification
