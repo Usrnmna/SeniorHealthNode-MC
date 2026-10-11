@@ -36,7 +36,11 @@ For buzzer polarity, run `python -m platformio test -e native -f test_alarm_buzz
 This suite calls the production `AlarmBuzzer` with both trigger polarities and
 records GPIO/LEDC requests for inactive initialization, failed initialization,
 beep completion, SOS gaps/stopping, battery pitch changes and cancellation, and
-SOS priority. It also checks the default instance against the compiled setting.
+SOS priority. It also checks the default instance against the compiled setting,
+PWM attachment only during tones, disconnection during silent gaps, idle polling
+without GPIO/LEDC writes, restoration of the ordinary pitch after battery playback,
+and inactive disconnected output after a failed frequency setup. LOW idle is the
+compiled default (`buzzer_active_low = false`).
 Disabled-output cases check that playback requests make no GPIO-level or LEDC
 calls, while the production fall-response state machine still escalates at its
 deadline and accepts the PRG confirmation gesture. These cases do not run the

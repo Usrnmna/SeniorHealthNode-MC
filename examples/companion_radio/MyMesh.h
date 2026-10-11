@@ -25,6 +25,7 @@
 
 #include "DataStore.h"
 #include "NodePrefs.h"
+#include "UsbReply.h"
 
 #include <RTClib.h>
 #include <helpers/ArduinoHelpers.h>
@@ -89,6 +90,7 @@ struct AdvertPath {
 #include "health/FallResponse.h"
 #include "health/LowBatteryAlert.h"
 #include "health/MotionHealth.h"
+#include "health/MotionStatistics.h"
 #include <helpers/GyroCalibration.h>
 #include "health/AssistanceDelivery.h"
 #include "health/FallNoticeOutbox.h"
@@ -107,6 +109,11 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
   AssistanceDelivery assistance{0}, fall_delivery{1};
   FallNoticeOutbox fall_notices;
   MotionHealth motion_health{FallDetectionConfig{}.max_sample_gap_ms, HealthNodeConfig::motion_fault_timeout_ms};
+  MotionStatistics motion_statistics;
+  MotionStatistics motion_stats_reply;
+  int8_t motion_stats_row = -1;
+  bool motion_stats_raw = false;
+  void continueMotionStatsReply();
   bool last_motion_fault = false;
   GyroCalibration gyro_calibration;
   uint32_t calibration_reported_at = 0;
@@ -117,6 +124,7 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
   void reportAssistance();
   void onPacketTxComplete(uint32_t tag, bool sent) override;
   bool handleHealthCommand(const char* command, char* reply);
+  bool handleDiagnosticCommand(const char* command);
   uint8_t setFallChannel(const char* value);
   bool calibrationIncidentBusy() const;
   uint8_t controlCalibration(const char* action, char* reply);
@@ -231,6 +239,12 @@ public:
   bool hasPendingWork() const;
 
 private:
+  UsbReply usb_reply;
+  bool handleSettingsCommand(const char* command, char* reply);
+  // 0 success, 1 invalid, 2 storage, 3 busy, 4 apply/rollback failure.
+  uint8_t commitSettings(NodePrefs& candidate, char* reply);
+  bool applySettings(const NodePrefs& candidate, const NodePrefs& previous);
+  void replySettingsResult(NodePrefs& candidate);
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();

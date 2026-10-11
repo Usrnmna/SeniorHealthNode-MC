@@ -5,10 +5,11 @@ BLE companion services, GY-521/MPU6050 fall detection, SOS, PRG acknowledgement,
 30-second escalation, residual-movement tracking, late confirmation, delayed
 double-press false-alarm responses, persistent
 public/private channel selection, delivery retries and low-battery reminders.
-Buzzer polarity defaults to active-low (`buzzer_active_low = true`); see the
+Buzzer polarity defaults to LOW idle (`buzzer_active_low = false`); see the
 [configuration and incorrect-setting effects](gy521_sensor.md#buzzer-trigger-polarity).
 Output is optional (`buzzer_enabled`); host tests cover disabled operation as
-well as both enabled trigger polarities.
+well as both enabled trigger polarities, PWM disconnection during silence,
+idle polling without hardware writes and inactive output after a failed pitch change.
 
 The [stationary gyroscope calibration](gyro_calibration.md) adds USB/BLE controls,
 independent validation, explicit persistence and temporary detection suspension.

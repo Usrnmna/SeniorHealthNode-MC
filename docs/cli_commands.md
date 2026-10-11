@@ -1,5 +1,11 @@
 # CLI Commands
 
+The [local USB configuration and statistics reference](usb_cli_reference.md)
+describes companion `get`/`set` settings, the `username`/`name` alias, supported
+upstream keys, and detailed `health`/`motion` statistics. Configuration setters
+share validation and persistence with the corresponding BLE protocol operations.
+Statistics use RAM aggregates; no logging or streaming commands are added.
+
 The local SeniorHealthNode BLE companion supports the fall-channel commands below
 through USB serial and the companion custom-variable protocol over BLE. Gyroscope
 calibration control/status also uses both interfaces; see the
@@ -25,6 +31,11 @@ command. These commands remain available while BLE companion services run:
 | `calibrate save` / `calibrate cancel` / `calibrate reset` | Save validated offsets, cancel/discard an attempt, or save zero correction. |
 | `get calibrate` / `set calibrate <action>` | Shared USB/BLE status and control; actions are `start`, `save`, `cancel` and `reset`. |
 | `health` | `fall` and `help` delivery states, `motion` availability, `max_gap_ms`, `gaps` and `part_failed`. |
+| `health detail`, `health timing`, `health errors`, `health radio` | Detailed sensor/detector, fresh-sample timing, error/recovery and radio diagnostics. |
+| `motion stats`, `motion stats raw` | Fresh-sample counts and min/max/mean/sample standard deviation for axes, magnitudes and chip temperature. |
+| `motion stats reset`, `health stats reset` | Reset RAM aggregates; the health reset also clears sensor diagnostic counters. Neither clears alarms, faults, detector state, calibration or startup gap counters. |
+| `get username`, `set username <name>` | Inspect or set the advertised name used in ordinary companion messages; alias of `get/set name`. Fall messages remain nameless group texts. |
+| `help`, `help get`, `help set`, `help health`, `help motion` | Discover local commands, settings and diagnostic subcommands. |
 | `beep` | Starts a 150 ms, 2000 Hz beep if output is enabled and PWM is available; reports unavailable during an active alarm sequence, or `Buzzer disabled by buzzer_enabled=false` when compiled out of operation. A started beep does not establish that a physical module is connected. |
 | `battery` | Cached raw ADC average, battery millivolts, sample age and effective multiplier. |
 | `battery calibrate <meter_mV>` | Suggests a multiplier using an actual meter reading; does not apply or save it. |
@@ -32,6 +43,11 @@ command. These commands remain available while BLE companion services run:
 | `set adc.multiplier <value>` | Saves and applies a multiplier from 0 to 10; `0` restores the board default of 5.42. |
 | `get fall.channel` | Describes the configured destination without returning its shared key. |
 | `set fall.channel ...` | Validates and saves the destination for new incidents; syntax below. |
+
+The `beep` output uses 50% PWM on GPIO47 and returns to LOW idle by default.
+`buzzer_active_low` and `buzzer_enabled` are compiled configuration values, not
+USB/BLE `get`/`set` keys. See the [passive-module wiring and polarity
+guide](gy521_sensor.md#buzzer-trigger-polarity) before changing either setting.
 
 `help` is the current response-message part. `part_failed=1` preserves a failed
 part until the next response event. `motion=monitoring` means no prolonged data

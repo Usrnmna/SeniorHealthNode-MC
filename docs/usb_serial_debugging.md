@@ -10,6 +10,41 @@ the connected system. Only one application should hold
 the device's serial port at a time; close flashers and other serial monitors.
 The USB cable must support data transfer.
 
+## Configuration and detailed statistics
+
+The [USB CLI reference](usb_cli_reference.md) lists supported `get`/`set` keys,
+validation and persistence behavior, the `username` alias, and detailed health
+and motion fields. The same terminal setup applies on both operating systems.
+
+After flashing, follow the [post-flash USB CLI verification
+procedure](usb_cli_reference.md#post-flash-usb-cli-verification) for command and
+username checks, the 60-second quiet-baseline versus repeated-query comparison,
+and interpretation of timing, gap and error counters.
+
+```text
+help set
+get username
+set username "Medical Node 2"
+get radio
+health detail
+health timing
+health errors
+health radio
+motion stats
+motion stats raw
+```
+
+`motion stats reset` begins a new motion/timing measurement interval.
+`health stats reset` additionally resets sensor diagnostic error counters.
+Neither clears an alarm, changes detector state, erases calibration, or clears
+the original since-startup `max_gap_ms` and `gaps` fields. A saved calibration
+change also resets the motion aggregates to avoid combining different corrections.
+
+Send one command at a time. Replies drain in bounded chunks; a stalled USB reader
+pauses replies without waiting inside the motion loop. Collection uses fixed-size
+RAM aggregates and no per-sample output. Device timing still requires validation
+under representative sensor, BLE and radio load.
+
 ## Windows: PowerShell
 
 Open PowerShell in the project root containing `platformio.ini`, then run:
@@ -224,8 +259,20 @@ For `beep`, `Beep started` means that software accepted playback, not that a
 buzzer was electrically detected. A disconnected buzzer therefore produces no
 sound despite this reply. `Buzzer disabled by buzzer_enabled=false` identifies
 the compiled disabled mode; `Beep unavailable or alarm active` indicates PWM
-unavailability or an active sound sequence. An LED sharing the active-low signal
-should follow the tone when wired as an appropriate 3.3 V indicator circuit.
+unavailability or an active sound sequence. The default DIYables configuration
+uses GPIO47 with 50% PWM during tones and LOW during silence
+(`buzzer_active_low = false`). PWM disconnects between tones. An indicator
+sharing this signal requires a current-limiting resistor and a circuit matched
+to the configured polarity; an indicator wired for HIGH-idle operation may show
+the opposite silent/sounding behavior. See the
+[wiring and polarity guide](gy521_sensor.md#buzzer-trigger-polarity).
+
+After flashing, run `beep` while no alarm or calibration is active. Confirm one
+150 ms tone followed by silence, with no repeated sound. The expected ordinary
+tone is 2000 Hz; an oscilloscope or logic analyzer can verify frequency, 50% duty
+and LOW idle. A successful CLI response alone does not validate the waveform or
+module current. Buzzer enable and polarity are compiled settings and require a
+rebuild and flash; they are not USB `set` commands.
 
 The SOS pattern is three short, three long and three short tones, followed by
 five seconds of silence. The low-battery pattern is three 450 ms tones at

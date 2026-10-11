@@ -5,6 +5,7 @@
 #include <initializer_list>
 #endif
 #include "MyMesh.h"
+#include "CompanionSettings.h"
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
@@ -967,7 +968,7 @@ void MyMesh::begin(bool has_display) {
 
   // sanitise bad pref values
   _prefs.rx_delay_base = constrain(_prefs.rx_delay_base, 0, 20.0f);
-  _prefs.airtime_factor = constrain(_prefs.airtime_factor, 0, 9.0f);
+  _prefs.airtime_factor = constrain(_prefs.airtime_factor, 0, 99.0f);
   _prefs.freq = constrain(_prefs.freq, 150.0f, 2500.0f);
   _prefs.bw = constrain(_prefs.bw, 7.8f, 500.0f);
   _prefs.sf = constrain(_prefs.sf, 5, 12);
@@ -1004,6 +1005,7 @@ void MyMesh::begin(bool has_display) {
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
+  if (board.canControlLoRaFemLna()) board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
 }
@@ -1236,12 +1238,11 @@ void MyMesh::handleCmdFrame(size_t len) {
       _most_recent_lastmod = 0;
     }
   } else if (cmd_frame[0] == CMD_SET_ADVERT_NAME && len >= 2) {
-    int nlen = len - 1;
-    if (nlen > sizeof(_prefs.node_name) - 1) nlen = sizeof(_prefs.node_name) - 1; // max len
-    memcpy(_prefs.node_name, &cmd_frame[1], nlen);
-    _prefs.node_name[nlen] = 0; // null terminator
-    savePrefs();
-    writeOKFrame();
+    NodePrefs candidate(_prefs);
+    const size_t name_size = cmd_frame[len - 1] == 0 ? len - 2 : len - 1;
+    if (!CompanionSettings::setName(candidate, (const char*)cmd_frame + 1, name_size))
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    else replySettingsResult(candidate);
   } else if (cmd_frame[0] == CMD_SET_ADVERT_LATLON && len >= 9) {
     int32_t lat, lon, alt = 0;
     memcpy(&lat, &cmd_frame[1], 4);
@@ -1250,10 +1251,10 @@ void MyMesh::handleCmdFrame(size_t len) {
       memcpy(&alt, &cmd_frame[9], 4); // for FUTURE support
     }
     if (lat <= 90 * 1E6 && lat >= -90 * 1E6 && lon <= 180 * 1E6 && lon >= -180 * 1E6) {
-      sensors.node_lat = ((double)lat) / 1000000.0;
-      sensors.node_lon = ((double)lon) / 1000000.0;
-      savePrefs();
-      writeOKFrame();
+      NodePrefs candidate(_prefs);
+      candidate.node_lat = ((double)lat) / 1000000.0;
+      candidate.node_lon = ((double)lon) / 1000000.0;
+      replySettingsResult(candidate);
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid geo coordinate
     }
@@ -1403,6 +1404,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 1);
     }
   } else if (cmd_frame[0] == CMD_SET_RADIO_PARAMS) {
+    if (len < 11 || len > 12 || (len == 12 && cmd_frame[11] > 1)) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG); return;
+    }
     int i = 1;
     uint32_t freq;
     memcpy(&freq, &cmd_frame[i], 4);
@@ -1421,44 +1425,37 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else if (freq >= 150000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
         bw <= 500000) {
-      _prefs.sf = sf;
-      _prefs.cr = cr;
-      _prefs.freq = (float)freq / 1000.0;
-      _prefs.bw = (float)bw / 1000.0;
-      _prefs.setRepeatEn(repeat != 0);
-      savePrefs();
-
-      radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
-      MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
-                         (uint32_t)cr);
-
-      writeOKFrame();
+      NodePrefs candidate(_prefs);
+      candidate.sf = sf; candidate.cr = cr;
+      candidate.freq = (float)freq / 1000.0; candidate.bw = (float)bw / 1000.0;
+      candidate.setRepeatEn(repeat != 0);
+      replySettingsResult(candidate);
     } else {
       MESH_DEBUG_PRINTLN("Error: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
                          (uint32_t)cr);
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SET_RADIO_TX_POWER) {
+    if (len != 2) { writeErrFrame(ERR_CODE_ILLEGAL_ARG); return; }
     int8_t power = (int8_t)cmd_frame[1];
     if (power < -9 || power > MAX_LORA_TX_POWER) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      _prefs.tx_power_dbm = power;
-      savePrefs();
-      radio_driver.setTxPower(_prefs.tx_power_dbm);
-      writeOKFrame();
+      NodePrefs candidate(_prefs); candidate.tx_power_dbm = power;
+      replySettingsResult(candidate);
     }
   } else if (cmd_frame[0] == CMD_SET_TUNING_PARAMS) {
+    if (len != 9) { writeErrFrame(ERR_CODE_ILLEGAL_ARG); return; }
     int i = 1;
     uint32_t rx, af;
     memcpy(&rx, &cmd_frame[i], 4);
     i += 4;
     memcpy(&af, &cmd_frame[i], 4);
     i += 4;
-    _prefs.rx_delay_base = ((float)rx) / 1000.0f;
-    _prefs.airtime_factor = ((float)af) / 1000.0f;
-    savePrefs();
-    writeOKFrame();
+    NodePrefs candidate(_prefs);
+    candidate.rx_delay_base = ((float)rx) / 1000.0f;
+    candidate.airtime_factor = ((float)af) / 1000.0f;
+    replySettingsResult(candidate);
   } else if (cmd_frame[0] == CMD_GET_TUNING_PARAMS) {
     uint32_t rx = _prefs.rx_delay_base * 1000, af = _prefs.airtime_factor * 1000;
     int i = 0;
@@ -1467,28 +1464,30 @@ void MyMesh::handleCmdFrame(size_t len) {
     memcpy(&out_frame[i], &af, 4); i += 4;
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_SET_OTHER_PARAMS) {
-    _prefs.manual_add_contacts = cmd_frame[1];
+    if (len < 2 || len > 5 || (len >= 3 && (cmd_frame[2] & 0xC0))) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG); return;
+    }
+    NodePrefs candidate(_prefs);
+    candidate.manual_add_contacts = cmd_frame[1];
     if (len >= 3) {
-      _prefs.telemetry_mode_base = cmd_frame[2] & 0x03; // v5+
-      _prefs.telemetry_mode_loc = (cmd_frame[2] >> 2) & 0x03;
-      _prefs.telemetry_mode_env = (cmd_frame[2] >> 4) & 0x03;
+      candidate.telemetry_mode_base = cmd_frame[2] & 0x03; // v5+
+      candidate.telemetry_mode_loc = (cmd_frame[2] >> 2) & 0x03;
+      candidate.telemetry_mode_env = (cmd_frame[2] >> 4) & 0x03;
 
       if (len >= 4) {
-        _prefs.advert_loc_policy = cmd_frame[3];
+        candidate.advert_loc_policy = cmd_frame[3];
         if (len >= 5) {
-          _prefs.multi_acks = cmd_frame[4];
+          candidate.multi_acks = cmd_frame[4];
         }
       }
     }
-    savePrefs();
-    writeOKFrame();
-  } else if (cmd_frame[0] == CMD_SET_PATH_HASH_MODE && cmd_frame[1] == 0 && len >= 3) {
+    replySettingsResult(candidate);
+  } else if (cmd_frame[0] == CMD_SET_PATH_HASH_MODE && len >= 3 && cmd_frame[1] == 0) {
     if (cmd_frame[2] >= 3) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      _prefs.path_hash_mode = cmd_frame[2];
-      savePrefs();
-      writeOKFrame();
+      NodePrefs candidate(_prefs); candidate.path_hash_mode = cmd_frame[2];
+      replySettingsResult(candidate);
     }
   } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
     if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
@@ -1824,9 +1823,8 @@ void MyMesh::handleCmdFrame(size_t len) {
 
     // ensure pin is zero, or a valid 6 digit pin
     if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
-      _prefs.ble_pin = pin;
-      savePrefs();
-      writeOKFrame();
+      NodePrefs candidate(_prefs); candidate.ble_pin = pin;
+      replySettingsResult(candidate);
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
@@ -1885,19 +1883,14 @@ void MyMesh::handleCmdFrame(size_t len) {
         return;
       }
 #endif
+      if (!strcmp(sp, "gps") || !strcmp(sp, "gps_interval")) {
+        NodePrefs candidate(_prefs); char reply[160];
+        if (CompanionSettings::access(candidate, sp, np, reply, MAX_LORA_TX_POWER)) replySettingsResult(candidate);
+        else writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+        return;
+      }
       bool success = sensors.setSettingValue(sp, np);
       if (success) {
-        #if ENV_INCLUDE_GPS == 1
-        // Update node preferences for GPS settings
-        if (strcmp(sp, "gps") == 0) {
-          _prefs.gps_enabled = (np[0] == '1') ? 1 : 0;
-          savePrefs();
-        } else if (strcmp(sp, "gps_interval") == 0) {
-          uint32_t interval_seconds = atoi(np);
-          _prefs.gps_interval = constrain(interval_seconds, 0, 86400);
-          savePrefs();
-        }
-        #endif
         writeOKFrame();
       } else {
         writeErrFrame(ERR_CODE_ILLEGAL_ARG);
@@ -2002,21 +1995,23 @@ void MyMesh::handleCmdFrame(size_t len) {
     send_unscoped = true;
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SET_DEFAULT_FLOOD_SCOPE && len >= 1) {
-    if (len >= 1+31+16) {
-      int n = strlen((char *) &cmd_frame[1]);
-      if (n > 0 && n < 31) {
-        strcpy(_prefs.default_scope_name, (char *) &cmd_frame[1]);
-        memcpy(_prefs.default_scope_key, &cmd_frame[1+31], 16);
-        savePrefs();
-        writeOKFrame();
+    NodePrefs candidate(_prefs);
+    if (len == 1+31+16) {
+      const size_t n = strnlen((char*)&cmd_frame[1], 31);
+      if (n > 0 && n < 31 && CompanionSettings::validName((char*)&cmd_frame[1], n)) {
+        memcpy(candidate.default_scope_name, &cmd_frame[1], n);
+        candidate.default_scope_name[n] = 0;
+        memcpy(candidate.default_scope_key, &cmd_frame[1+31], 16);
+        replySettingsResult(candidate);
       } else {
         writeErrFrame(ERR_CODE_ILLEGAL_ARG);
       }
+    } else if (len == 1) {
+      memset(candidate.default_scope_name, 0, sizeof(candidate.default_scope_name));
+      memset(candidate.default_scope_key, 0, sizeof(candidate.default_scope_key));
+      replySettingsResult(candidate);
     } else {
-      memset(_prefs.default_scope_name, 0, sizeof(_prefs.default_scope_name));  // set default scope to null
-      memset(_prefs.default_scope_key, 0, sizeof(_prefs.default_scope_key));
-      savePrefs();
-      writeOKFrame();
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_GET_DEFAULT_FLOOD_SCOPE) {
     out_frame[0] = RESP_CODE_DEFAULT_FLOOD_SCOPE;
@@ -2036,12 +2031,13 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_TABLE_FULL);
     }
   } else if (cmd_frame[0] == CMD_SET_AUTOADD_CONFIG) {
-    _prefs.autoadd_config = cmd_frame[1];
+    if (len < 2 || len > 3) { writeErrFrame(ERR_CODE_ILLEGAL_ARG); return; }
+    NodePrefs candidate(_prefs);
+    candidate.autoadd_config = cmd_frame[1];
     if (len >= 3) {
-      _prefs.autoadd_max_hops = min(cmd_frame[2], (uint8_t)64);
+      candidate.autoadd_max_hops = cmd_frame[2];
     }
-    savePrefs();
-    writeOKFrame();
+    replySettingsResult(candidate);
   } else if (cmd_frame[0] == CMD_GET_AUTOADD_CONFIG) {
     int i = 0;
     out_frame[i++] = RESP_CODE_AUTOADD_CONFIG;
@@ -2092,7 +2088,19 @@ void MyMesh::enterCLIRescue() {
   Serial.println("========= CLI Rescue =========");
 }
 
+// Keep protocol status codes consistent for all preference mutations.
+void MyMesh::replySettingsResult(NodePrefs& candidate) {
+  char reply[160];
+  const uint8_t result = commitSettings(candidate, reply);
+  if (!result) writeOKFrame();
+  else writeErrFrame(result == 1 ? ERR_CODE_ILLEGAL_ARG : result == 2 ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_BAD_STATE);
+}
+
 void MyMesh::checkCLIRescueCmd(bool health_only) {
+  if (usb_reply.pending()) { usb_reply.drain(Serial); return; }
+#if ENV_INCLUDE_MPU6050
+  if (motion_stats_row >= 0) { continueMotionStatsReply(); return; }
+#endif
   int len = strlen(cli_command);
   unsigned serial_bytes = 0;
 #if ENV_INCLUDE_MPU6050
@@ -2107,7 +2115,7 @@ void MyMesh::checkCLIRescueCmd(bool health_only) {
     if (c == '\n' && len == 0 && !cli_overflow) continue; // CRLF's trailing LF.
     if (c == '\r' || c == '\n') {
       if (cli_overflow) {
-        Serial.println("Error: command too long or contains invalid bytes");
+        usb_reply.append("Error: command too long or contains invalid bytes\n");
         cli_command[0] = 0; cli_overflow = false;
         return;
       }
@@ -2123,14 +2131,20 @@ void MyMesh::checkCLIRescueCmd(bool health_only) {
   if (len > 0 && cli_command[len - 1] == '\r') {  // received complete line
     cli_command[len - 1] = 0;  // replace newline with C string null terminator
 
+    char reply[160] = {};
 #if ENV_INCLUDE_MPU6050
-    char reply[160];
-    if (handleHealthCommand(cli_command, reply)) {
-      Serial.println(reply);
+    if (handleDiagnosticCommand(cli_command)) {
+      // Diagnostic replies drain incrementally on subsequent loop iterations.
     } else
 #endif
-    if (health_only) {
-      Serial.println("Commands: health, motion [raw], calibrate [start/status/show/show saved/save/cancel/reset], beep, battery, battery calibrate <mV>, get/set adc.multiplier, get/set fall.channel, get/set calibrate");
+    if (health_only && handleSettingsCommand(cli_command, reply)) {
+      if (*reply) usb_reply.append("%s\n", reply);
+#if ENV_INCLUDE_MPU6050
+    } else if (handleHealthCommand(cli_command, reply)) {
+      usb_reply.append("%s\n", reply);
+#endif
+    } else if (health_only) {
+      usb_reply.append("Error: unknown command; use help\n");
     } else if (memcmp(cli_command, "set ", 4) == 0) {
       const char* config = &cli_command[4];
       if (memcmp(config, "pin ", 4) == 0) {

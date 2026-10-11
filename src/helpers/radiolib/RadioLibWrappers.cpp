@@ -51,6 +51,10 @@ void RadioLibWrapper::setTxPower(int8_t dbm) {
   _radio->setOutputPower(dbm);
 }
 
+bool RadioLibWrapper::configurationBusy() {
+  return (state & STATE_INT_READY) || state == STATE_TX_WAIT || state == STATE_TX_DONE || isReceivingPacket();
+}
+
 void RadioLibWrapper::idle() {
   _radio->standby();
   state = STATE_IDLE;   // need another startReceive()

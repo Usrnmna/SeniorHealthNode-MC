@@ -34,6 +34,7 @@ public:
   uint32_t gps_interval = 0;     // GPS read interval in seconds
   uint8_t autoadd_config = 0;    // bitmask for auto-add contacts config
   uint8_t rx_boosted_gain = 0; // SX126x RX boosted gain mode (0=power saving, 1=boosted)
+  uint8_t radio_fem_rxgain = 1; // External LNA; independent of SX1262 boosted RX gain.
   uint8_t _client_repeat = 0;  // DEPRECATED -> use repeat.disable_fwd
   uint8_t path_hash_mode = 0;    // which path mode to use when sending
   uint8_t autoadd_max_hops = 0;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
@@ -52,7 +53,8 @@ private:
       //def("cad", _parent->cad_enabled);
       //def("int_thr", _parent->interference_threshold);
       def("rxgain", _parent->rx_boosted_gain);
-      def("fem_rxgain", _parent->rx_boosted_gain);
+      // Earlier records duplicated rxgain under fem_rxgain; fem_lna is independent.
+      def("fem_lna", _parent->radio_fem_rxgain);
       def("tx", _parent->tx_power_dbm);
       def("af", _parent->airtime_factor);
       def("rxdelay", _parent->rx_delay_base);
@@ -133,6 +135,31 @@ public:
     node_name[0] = 0;
     default_scope_name[0] = 0;
     memset(default_scope_key, 0, sizeof(default_scope_key));
+  }
+  // Serializer sections retain pointers to their owning preferences. Copy only
+  // values so a staged transaction cannot serialize or modify another instance.
+  NodePrefs(const NodePrefs& other) : NodePrefs() { *this = other; }
+  NodePrefs& operator=(const NodePrefs& other) {
+    airtime_factor = other.airtime_factor;
+    memcpy(node_name, other.node_name, sizeof(node_name));
+    node_lat = other.node_lat; node_lon = other.node_lon;
+    freq = other.freq; bw = other.bw; sf = other.sf; cr = other.cr;
+    multi_acks = other.multi_acks; manual_add_contacts = other.manual_add_contacts;
+    tx_power_dbm = other.tx_power_dbm;
+    telemetry_mode_base = other.telemetry_mode_base;
+    telemetry_mode_loc = other.telemetry_mode_loc; telemetry_mode_env = other.telemetry_mode_env;
+    rx_delay_base = other.rx_delay_base; ble_pin = other.ble_pin;
+    adc_multiplier = other.adc_multiplier; advert_loc_policy = other.advert_loc_policy;
+    buzzer_quiet = other.buzzer_quiet; vibe_quiet = other.vibe_quiet;
+    gps_enabled = other.gps_enabled; gps_interval = other.gps_interval;
+    autoadd_config = other.autoadd_config; rx_boosted_gain = other.rx_boosted_gain;
+    radio_fem_rxgain = other.radio_fem_rxgain;
+    _client_repeat = other._client_repeat; path_hash_mode = other.path_hash_mode;
+    autoadd_max_hops = other.autoadd_max_hops;
+    memcpy(default_scope_name, other.default_scope_name, sizeof(default_scope_name));
+    memcpy(default_scope_key, other.default_scope_key, sizeof(default_scope_key));
+    setRepeatEn(other.isRepeatEn());
+    return *this;
   }
   // new accessor methods
   bool isRepeatEn() const { return repeat.disable_fwd == 0; }
