@@ -9,13 +9,24 @@ class FallNoticeOutbox {
 public:
   bool enqueue(FallNotice notice, uint32_t incident, const FallNoticeMessage::Bundle& message,
                const FallChannel& channel = FallChannel{}) {
-    Slot& waiting = notice == FallNotice::UserConfirmedFall ? confirmation : ordinary;
+    Slot& waiting = isUserConfirmation(notice) ? confirmation : ordinary;
     if (waiting.notice != FallNotice::None) return false;
     waiting.notice = notice; waiting.incident = incident; waiting.message = message;
     waiting.channel = channel;
-    if (notice == FallNotice::UserConfirmedFall && ordinary.incident == incident &&
+    if (isUserConfirmation(notice) && ordinary.incident == incident &&
         isAutomaticWarning(ordinary.notice)) ordinary.notice = FallNotice::None;
     return true;
+  }
+
+  // Resolve local cancellation even when a previous confirmation occupies the
+  // reserved slot. Never remove another incident's warning or an explicit reply.
+  void cancelWarnings(uint32_t incident, AssistanceTransport& link, AssistanceDelivery& delivery) {
+    if (ordinary.incident == incident && isAutomaticWarning(ordinary.notice))
+      ordinary.notice = FallNotice::None;
+    if (active.incident == incident && isAutomaticWarning(active.notice)) {
+      delivery.supersede(link);
+      active.notice = FallNotice::None;
+    }
   }
 
   // Confirmation supersedes only its own automatic warning, including unsent

@@ -5,7 +5,13 @@
 // Channel selection can override the defaults below via USB/BLE: set fall.channel.
 namespace HealthNodeConfig {
 // External passive buzzer via a 3.3 V-compatible driver; GPIO is a signal only.
+// Optional output: false skips all buzzer GPIO/PWM setup and playback.
+// Sensor monitoring, PRG responses and channel alerts remain enabled without a buzzer.
+constexpr bool buzzer_enabled = true;
 constexpr int buzzer_pin = 47;          // Free header GPIO on the V4 OLED target.
+// true: LOW-level-trigger module (silent HIGH). false: HIGH-active driver (silent LOW).
+// Match the driver hardware, then rebuild and flash; wrong polarity energizes idle periods.
+constexpr bool buzzer_active_low = true;
 constexpr uint8_t buzzer_pwm_channel = 0; // Reserved ESP32 LEDC channel (Arduino 2.x).
 constexpr uint32_t buzzer_frequency_hz = 2000;
 constexpr uint32_t beep_ms = 150;
@@ -17,12 +23,34 @@ constexpr uint16_t low_battery_mv = 3500; // Start below; clear above; equality 
 constexpr uint32_t low_battery_poll_ms = 1000;
 constexpr uint32_t battery_settle_ms = 10; // ADC divider power-up; loop keeps running.
 constexpr uint8_t battery_adc_samples = 8; // One conversion per loop pass.
+constexpr uint32_t battery_calibration_max_age_ms = 2500;
+constexpr uint16_t battery_calibration_min_mv = 3300; // Meter input: one Li-ion cell.
+constexpr uint16_t battery_calibration_max_mv = 4200;
 
 // Sampling/recovery and background environmental collection (combined BLE companion).
 constexpr uint32_t motion_sample_ms = 20;
 constexpr uint8_t motion_fast_failures = 3; // Consecutive failed reads before reinitialization.
 constexpr uint32_t motion_retry_ms = 20;
 constexpr uint32_t motion_missing_retry_ms = 5000;
+constexpr uint32_t motion_data_timeout_ms = 1000; // Bus works but no new sensor output.
+
+// Stationary gyroscope calibration. Any fixed orientation is valid; gravity is retained.
+// Quality limits are initial engineering values requiring actual-board validation.
+constexpr uint32_t gyro_calibration_prepare_ms = 3000;
+constexpr uint32_t gyro_calibration_measure_ms = 15000;
+constexpr uint32_t gyro_calibration_validate_ms = 2000;
+constexpr uint32_t gyro_calibration_timeout_ms = 60000;
+constexpr uint32_t gyro_calibration_candidate_ms = 120000;
+constexpr uint32_t gyro_calibration_max_gap_ms = 100;
+constexpr uint32_t gyro_calibration_min_samples = 600; // 80% of nominal 50 Hz over 15 s.
+constexpr uint32_t gyro_calibration_validation_samples = 80;
+constexpr float gyro_calibration_gravity_tolerance_g = 0.15f;
+constexpr float gyro_calibration_accel_span_g = 0.04f; // Per-axis span within a window.
+constexpr float gyro_calibration_gyro_span_dps = 1.0f;
+constexpr float gyro_calibration_noise_dps = 0.15f; // Maximum per-axis standard deviation.
+constexpr float gyro_calibration_max_bias_dps = 20.0f;
+constexpr float gyro_calibration_residual_dps = 0.30f;
+constexpr float gyro_calibration_temperature_span_c = 2.0f;
 constexpr uint32_t environment_refresh_ms = 60000;
 constexpr uint32_t environment_stale_ms = 120000; // Omit expired/failed cache entries.
 constexpr uint32_t environment_conversion_timeout_ms = 1000;
@@ -39,7 +67,8 @@ constexpr uint32_t low_battery_tones_hz[] = {2093, 1760, 1480};
 constexpr int charging_status_pin = -1;
 constexpr bool charging_status_active_low = true;
 
-constexpr uint32_t click_window_ms = 3000; // First down -> third up, inclusive.
+constexpr uint32_t click_window_ms = 3000; // First down -> third up, inclusive; double waits until closed.
+constexpr uint32_t false_alarm_click_window_ms = 1000; // First down -> second up, inclusive.
 constexpr uint32_t long_press_ms = 1000;   // Matches heltec_v4/target.cpp; reject >=.
 constexpr uint32_t debounce_ms = 25;       // Each press AND release must settle.
 
@@ -55,6 +84,7 @@ constexpr float residual_rotation_dps = 5.0f; // Rotation at/above this value br
 constexpr char unconfirmed_message[] = u8"USER COULD NOT CONFIRM THEIR CONDITION";
 constexpr char no_movement_message[] = u8"NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER";
 constexpr char confirmed_message[] = u8"USER HAS CONFIRMED FALL";
+constexpr char false_alarm_message[] = u8"User Confirms False Alarm"; // Formatter appends location.
 
 // Channel identity is its shared key, NOT a companion's local channel slot.
 // Public hashtag channel: first 16 bytes of SHA256("#falldetect"), including '#'.
@@ -79,14 +109,35 @@ constexpr unsigned serial_rx_bytes_per_loop = 16; // Bound serial input/echo wor
 static_assert(morse_dot_ms > 0 && sos_silence_ms > 0, "Buzzer durations must be positive");
 static_assert(low_battery_poll_ms > 0 && low_battery_repeat_ms > 0, "Invalid battery timing");
 static_assert(battery_settle_ms > 0 && battery_adc_samples > 0, "Invalid ADC timing/count");
+static_assert(battery_calibration_max_age_ms > 0 && battery_calibration_min_mv > 0 &&
+              battery_calibration_min_mv < battery_calibration_max_mv,
+              "Invalid battery calibration limits");
 static_assert(motion_sample_ms > 0 && motion_fast_failures > 0 && motion_retry_ms > 0 &&
+              motion_data_timeout_ms >= motion_sample_ms &&
               motion_missing_retry_ms > 0, "Invalid motion retry timing");
+static_assert(gyro_calibration_prepare_ms > 0 && gyro_calibration_measure_ms > 0 &&
+              gyro_calibration_validate_ms > 0 && gyro_calibration_candidate_ms > 0 &&
+              gyro_calibration_timeout_ms > gyro_calibration_prepare_ms + gyro_calibration_measure_ms +
+                  gyro_calibration_validate_ms && gyro_calibration_timeout_ms < 0x80000000UL &&
+              gyro_calibration_candidate_ms < 0x80000000UL &&
+              gyro_calibration_max_gap_ms >= motion_sample_ms &&
+              gyro_calibration_max_gap_ms < gyro_calibration_validate_ms,
+              "Invalid gyroscope calibration timing");
+static_assert(gyro_calibration_min_samples > 1 && gyro_calibration_validation_samples > 1 &&
+              gyro_calibration_min_samples <= gyro_calibration_measure_ms / motion_sample_ms + 1 &&
+              gyro_calibration_validation_samples <= gyro_calibration_validate_ms / motion_sample_ms + 1 &&
+              gyro_calibration_gravity_tolerance_g > 0 && gyro_calibration_accel_span_g > 0 &&
+              gyro_calibration_gyro_span_dps > 0 && gyro_calibration_noise_dps > 0 &&
+              gyro_calibration_max_bias_dps > 0 && gyro_calibration_residual_dps > 0 &&
+              gyro_calibration_temperature_span_c > 0, "Invalid gyroscope calibration quality limits");
 static_assert(environment_refresh_ms > 0 && environment_stale_ms > environment_refresh_ms &&
               environment_conversion_timeout_ms > 80 && sensor_i2c_timeout_ms > 0,
               "Invalid environment timing");
 static_assert(charging_status_pin < 0 || charging_status_pin != buzzer_pin, "Charging/buzzer pin conflict");
 static_assert(debounce_ms > 0 && debounce_ms < long_press_ms, "Invalid debounce duration");
 static_assert(click_window_ms > 0 && ack_retry_ms > 0 && ack_max_attempts > 0, "Invalid timing");
+static_assert(false_alarm_click_window_ms > 0 && false_alarm_click_window_ms < click_window_ms &&
+              click_window_ms < 0x80000000UL, "Invalid false-alarm/confirmation windows");
 static_assert(response_timeout_ms > 0 && response_timeout_ms < 0x80000000UL &&
               residual_quiet_required_ms > 0 && residual_quiet_required_ms <= response_timeout_ms &&
               residual_max_sample_gap_ms >= motion_sample_ms &&

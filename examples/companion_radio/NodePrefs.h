@@ -26,6 +26,7 @@ public:
   uint8_t telemetry_mode_env = 0;
   float rx_delay_base = 0;
   uint32_t ble_pin = 0;
+  float adc_multiplier = 0;    // Zero selects board default; absent in older preferences.
   uint8_t  advert_loc_policy = 0;
   uint8_t  buzzer_quiet = 0;
   uint8_t  vibe_quiet = 0;
@@ -121,6 +122,7 @@ protected:
     //def("f_adv_int", flood_advert_interval);
     def("lat", node_lat);
     def("lon", node_lon);
+    def("adc_mult", adc_multiplier);
     def("radio", radio);
     def("gps", gps);
     def("repeat", repeat);

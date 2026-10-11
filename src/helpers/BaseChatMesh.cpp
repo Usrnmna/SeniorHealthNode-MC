@@ -126,7 +126,7 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, 
 
   ContactInfo* from = NULL;
   for (int i = 0; i < num_contacts; i++) {
-    if (id.matches(contacts[i].id)) {  // is from one of our contacts
+    if (id.matches(contacts[i].id)) {  // Matches a stored contact.
       from = &contacts[i];
       if (timestamp <= from->last_advert_timestamp) {  // check for replay attacks!!
         MESH_DEBUG_PRINTLN("onAdvertRecv: Possible replay attack, name: %s", from->name);
@@ -239,7 +239,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       onMessageRecv(from, packet, timestamp, (const char *) &data[5]);  // let UI know
 
       int text_len = strlen((char *)&data[5]);
-      uint8_t ack_hash[6];    // calc truncated hash of the message timestamp + text + sender pub_key, to prove to sender that we got it
+      uint8_t ack_hash[6];    // Calculate a truncated hash of timestamp, text and sender public key as receipt evidence.
       mesh::Utils::sha256(ack_hash, 4, data, 5 + text_len, from.id.pub_key, PUB_KEY_SIZE);
       // NEW: append (potential) extended attempt byte (to make packethash unique)
       ack_hash[4] = data[5 + text_len + 1];
@@ -269,7 +269,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       from.lastmod = getRTCClock()->getCurrentTime(); // update last heard time
       onSignedMessageRecv(from, packet, timestamp, &data[5], (const char *) &data[9]);  // let UI know
 
-      uint32_t ack_hash;    // calc truncated hash of the message timestamp + text + OUR pub_key, to prove to sender that we got it
+      uint32_t ack_hash;    // Calculate a truncated hash of timestamp, text and local public key as receipt evidence.
       mesh::Utils::sha256((uint8_t *) &ack_hash, 4, data, 9 + strlen((char *)&data[9]), self_id.pub_key, PUB_KEY_SIZE);
 
       if (packet->isRouteFlood()) {
@@ -296,7 +296,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       } else {
         mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, from.id, secret, temp_buf, reply_len);
         if (reply) {
-          if (from.out_path_len != OUT_PATH_UNKNOWN) {  // we have an out_path, so send DIRECT
+          if (from.out_path_len != OUT_PATH_UNKNOWN) {  // A known outbound path permits direct transmission.
             sendDirect(reply, from.out_path, from.out_path_len, SERVER_RESPONSE_DELAY);
           } else {
             sendFloodScoped(from, reply, SERVER_RESPONSE_DELAY);
@@ -307,7 +307,7 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
   } else if (type == PAYLOAD_TYPE_RESPONSE && len > 0) {
     onContactResponse(from, data, len);
     if (packet->isRouteFlood() && from.out_path_len != OUT_PATH_UNKNOWN) {
-      // we have direct path, but other node is still sending flood response, so maybe they didn't receive reciprocal path properly(?)
+      // The peer still floods responses despite a known direct path; reciprocal path reception may have failed.
       handleReturnPathRetry(from, packet->path, packet->path_len);
     }
   }
@@ -326,7 +326,7 @@ bool BaseChatMesh::onPeerPathRecv(mesh::Packet* packet, int sender_idx, const ui
 }
 
 bool BaseChatMesh::onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) {
-  // NOTE: default impl, we just replace the current 'out_path' regardless, whenever sender sends us a new out_path.
+  // Default implementation: replace the current outbound path whenever the sender supplies a new one.
   // FUTURE: could store multiple out_paths per contact, and try to find which is the 'best'(?)
   from.out_path_len = mesh::Packet::copyPath(from.out_path, out_path, out_path_len);  // store a copy of path, for sendDirect()
   from.lastmod = getRTCClock()->getCurrentTime();
@@ -336,7 +336,7 @@ bool BaseChatMesh::onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_
   if (extra_type == PAYLOAD_TYPE_ACK && extra_len >= 4) {
     // also got an encoded ACK!
     if (processAck(extra) != NULL) {
-      txt_send_timeout = 0;   // matched one we're waiting for, cancel timeout timer
+      txt_send_timeout = 0;   // The expected acknowledgement matched; cancel the timeout timer.
     }
   } else if (extra_type == PAYLOAD_TYPE_RESPONSE && extra_len > 0) {
     onContactResponse(from, extra, extra_len);
@@ -347,11 +347,11 @@ bool BaseChatMesh::onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_
 void BaseChatMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
   ContactInfo* from;
   if ((from = processAck((uint8_t *)&ack_crc)) != NULL) {
-    txt_send_timeout = 0;   // matched one we're waiting for, cancel timeout timer
+    txt_send_timeout = 0;   // The expected acknowledgement matched; cancel the timeout timer.
     packet->markDoNotRetransmit();   // ACK was for this node, so don't retransmit
 
     if (packet->isRouteFlood() && from->out_path_len != OUT_PATH_UNKNOWN) {
-      // we have direct path, but other node is still sending flood, so maybe they didn't receive reciprocal path properly(?)
+      // The peer still floods despite a known direct path; reciprocal path reception may have failed.
       handleReturnPathRetry(*from, packet->path, packet->path_len);
     }
   }
@@ -559,7 +559,7 @@ bool BaseChatMesh::importContact(const uint8_t src_buf[], uint8_t len) {
   if (pkt) {
     if (pkt->readFrom(src_buf, len) && pkt->getPayloadType() == PAYLOAD_TYPE_ADVERT) {
       pkt->header |= ROUTE_TYPE_FLOOD;   // simulate it being received flood-mode
-      getTables()->clear(pkt);  // remove packet hash from table, so we can receive/process it again
+      getTables()->clear(pkt);  // Remove the packet hash to permit receiving and processing the packet again.
       _pendingLoopback = pkt;  // loop-back, as if received over radio
       return true;  // success
     } else {
@@ -728,7 +728,7 @@ void BaseChatMesh::markConnectionActive(const ContactInfo& contact) {
     if (connections[i].keep_alive_millis > 0 && connections[i].server_id.matches(contact.id)) {
       connections[i].last_activity = getRTCClock()->getCurrentTime();
 
-      // re-schedule next KEEP_ALIVE, now that we have heard from server
+      // Reschedule the next KEEP_ALIVE after receiving server traffic.
       connections[i].next_ping = futureMillis(connections[i].keep_alive_millis);
       break;
     }
@@ -738,11 +738,11 @@ void BaseChatMesh::markConnectionActive(const ContactInfo& contact) {
 ContactInfo* BaseChatMesh::checkConnectionsAck(const uint8_t* data) {
   for (int i = 0; i < MAX_CONNECTIONS; i++) {
     if (connections[i].keep_alive_millis > 0 && memcmp(&connections[i].expected_ack, data, 4) == 0) {
-      // yes, got an ack for our keep_alive request!
+      // Acknowledgement received for the pending keep-alive request.
       connections[i].expected_ack = 0;
       connections[i].last_activity = getRTCClock()->getCurrentTime();
 
-      // re-schedule next KEEP_ALIVE, now that we have heard from server
+      // Reschedule the next KEEP_ALIVE after receiving server traffic.
       connections[i].next_ping = futureMillis(connections[i].keep_alive_millis);
 
       auto id = &connections[i].server_id;

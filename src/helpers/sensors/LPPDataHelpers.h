@@ -201,7 +201,7 @@ public:
       _buf[_len++] = channel;
       _buf[_len++] = LPP_GPS;
 
-      int32_t lati = lat * 10000;  // we lose some precision :-(
+      int32_t lati = lat * 10000;  // Scaling to an integer reduces coordinate precision.
       int32_t loni = lon * 10000;
       int32_t alti = alt * 100;
 

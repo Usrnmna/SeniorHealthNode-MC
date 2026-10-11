@@ -863,7 +863,7 @@ void EnvironmentSensorManager::initBasicGPS() {
   Serial1.begin(9600);
   #endif
 
-  // Try to detect if GPS is physically connected to determine if we should expose the setting
+  // Detect GPS connection evidence to determine whether to expose the setting.
   _location->begin();
   _location->reset();
 
@@ -874,7 +874,7 @@ void EnvironmentSensorManager::initBasicGPS() {
   // Give GPS a moment to power up and send data
   delay(1000);
 
-  // We'll consider GPS detected if we see any data on Serial1
+  // Treat any data on Serial1 as GPS detection evidence.
 #ifdef ENV_SKIP_GPS_DETECT
   gps_detected = true;
 #else

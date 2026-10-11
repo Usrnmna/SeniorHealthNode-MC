@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <functional>
 #include <vector>
+#include <array>
 
 // Transaction-level fake for MPU recovery and AHT conversion failure tests.
 class TwoWire {
@@ -9,6 +10,7 @@ public:
   std::function<std::vector<uint8_t>(uint8_t, uint8_t)> response;
   std::vector<std::vector<uint8_t>> writes;
   std::vector<uint8_t> tx, rx;
+  std::array<uint8_t, 256> registers{}; // Device configuration readback, after successful writes.
   size_t cursor = 0;
   unsigned requests = 0;
   uint8_t reg = 0, status = 0;
@@ -20,7 +22,9 @@ public:
     tx.insert(tx.end(), data, data + size); return size;
   }
   uint8_t endTransmission(bool = true) {
-    writes.push_back(tx); if (!tx.empty()) reg = tx[0]; return status;
+    writes.push_back(tx); if (!tx.empty()) reg = tx[0];
+    if (status == 0 && tx.size() == 2) registers[reg] = tx[1];
+    return status;
   }
   uint8_t requestFrom(uint8_t, uint8_t count) {
     ++requests; cursor = 0; rx = response ? response(reg, count) : std::vector<uint8_t>{};

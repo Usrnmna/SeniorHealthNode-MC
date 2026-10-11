@@ -14,7 +14,7 @@ struct AssistanceTestLink : AssistanceTransport {
   }
   void start(AssistanceDelivery& d, uint32_t now) {
     uint8_t payload[FallAckMessage::max_payload_bytes];
-    const unsigned len = FallAckMessage::encode(payload, 0, "Node", "Help");
+    const unsigned len = FallAckMessage::encode(payload, 0, "Help");
     d.begin(now, *this, payload, len);
   }
 };

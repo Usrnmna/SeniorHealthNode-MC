@@ -20,7 +20,7 @@ static
   ICACHE_RAM_ATTR
 #endif
 void setFlag(void) {
-  // we sent a packet, set the flag
+  // Set the transmission-complete flag.
   state |= STATE_INT_READY;
 }
 
@@ -69,7 +69,7 @@ void RadioLibWrapper::doResetAGC() {
 }
 
 void RadioLibWrapper::resetAGC() {
-  // make sure we're not mid-receive of packet!
+  // Avoid changing radio state during packet reception.
   if ((state & STATE_INT_READY) != 0 || isReceivingPacket()) return;
 
   doResetAGC();

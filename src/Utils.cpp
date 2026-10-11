@@ -238,7 +238,7 @@ int Utils::parseTextParts(char* text, const char* parts[], int max_num, char sep
        *sp++ = 0;  // replace the seperator with a null, and skip past it
     }
   }
-  // if we hit the maximum parts, make sure LAST entry does NOT have separator 
+  // At the maximum part count, ensure the final entry has no separator.
   while (*sp && *sp != separator) sp++;
   if (*sp) {
     *sp = 0;  // replace the separator with null

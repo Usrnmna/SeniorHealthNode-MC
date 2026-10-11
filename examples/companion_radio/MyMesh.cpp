@@ -1,6 +1,7 @@
 #if ENV_INCLUDE_MPU6050
 #include "health/FallAckSender.h"
 #include "health/FallChannelStore.h"
+#include "health/GyroCalibrationStore.h"
 #include <initializer_list>
 #endif
 #include "MyMesh.h"
@@ -427,7 +428,7 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
       _serial->writeFrame(out_frame, 9);
 
       // NOTE: the same ACK can be received multiple times!
-      expected_ack_table[i].ack = 0; // clear expected hash, now that we have received ACK
+      expected_ack_table[i].ack = 0; // Clear the expected hash after receiving the ACK.
       return expected_ack_table[i].contact;
     }
   }
@@ -470,7 +471,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   }
 
 #ifdef DISPLAY_CLASS
-  // we only want to show text messages on display, not cli data
+  // Display text messages only; exclude CLI data.
   bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   if (should_display && _ui) {
     _ui->newMsg(path_len, from.name, text, offline_queue_len);
@@ -483,7 +484,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
 #if ENV_INCLUDE_MPU6050
-    // Observe repeat evidence BEFORE Mesh's seen-packet table discards our echo.
+    // Observe repeat evidence before the seen-packet table discards the transmitted packet's echo.
     for (auto* delivery : {&fall_delivery, &assistance}) {
       if (FallAckSender::observeRepeat(*packet, *delivery) && delivery->queuedTag())
         cancelQueuedPacket(delivery->queuedTag()); // No duplicate queued retry after confirmation.
@@ -536,13 +537,13 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
-  markConnectionActive(from); // in case this is from a server, and we have a connection
+  markConnectionActive(from); // Update any existing connection associated with this server.
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
 
 void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                                const char *text) {
-  markConnectionActive(from); // in case this is from a server, and we have a connection
+  markConnectionActive(from); // Update any existing connection associated with this server.
   queueMessage(from, TXT_TYPE_CLI_DATA, pkt, sender_timestamp, NULL, 0, text);
 }
 
@@ -949,8 +950,17 @@ void MyMesh::begin(bool has_display) {
   // load persisted prefs
   _store->loadPrefs(_prefs);
 #if ENV_INCLUDE_MPU6050
+  if (!board.setAdcMultiplier(_prefs.adc_multiplier)) {
+    _prefs.adc_multiplier = 0;
+    board.setAdcMultiplier(0); // Reject invalid stored calibration; retain board default.
+  }
   if (!FallChannelStore::load(*_store->getPrimaryFS(), fall_channel))
     Serial.println("Fall channel settings invalid; use set fall.channel before sending alerts");
+  GyroCalibration::Result gyro_settings;
+  if (!GyroCalibrationStore::load(*_store->getPrimaryFS(), gyro_settings))
+    Serial.println("Gyro calibration settings invalid; using zero correction; recalibration required");
+  sensors.motion.setCalibration(gyro_settings);
+  if (gyro_settings.samples) gyro_calibration.saved();
 #endif
   sensors.node_lat = _prefs.node_lat;
   sensors.node_lon = _prefs.node_lon;
@@ -966,7 +976,7 @@ void MyMesh::begin(bool has_display) {
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
 
-#ifdef BLE_PIN_CODE // 123456 by default
+#ifdef BLE_PIN_CODE // Board default; 123456 requests random pairing on display builds.
   if (_prefs.ble_pin == 0) {
 #ifdef DISPLAY_CLASS
     if (has_display && BLE_PIN_CODE == 123456) {
@@ -1623,7 +1633,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       // 'Path Discovery' is just a special case of flood + Telemetry req
       uint8_t req_data[9];
       req_data[0] = REQ_TYPE_GET_TELEMETRY_DATA;
-      req_data[1] = ~(TELEM_PERM_BASE);  // NEW: inverse permissions mask (ie. we only want BASE telemetry)
+      req_data[1] = ~(TELEM_PERM_BASE);  // Inverse permissions mask requesting BASE telemetry only.
       memset(&req_data[2], 0, 3);  // reserved
       getRNG()->random(&req_data[5], 4);   // random blob to help make packet-hash unique
       auto save = recipient->out_path_len;    // temporarily force sendRequest() to flood
@@ -1828,7 +1838,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     auto append = [&](const char* name, const char* value) {
       const bool comma = dp != (char *)&out_frame[1];
       const size_t size = strlen(name) + 1 + strlen(value) + unsigned(comma);
-      if (size_t(dp - (char *)out_frame) + size > MAX_FRAME_SIZE) return false;
+      if (size_t(dp - (char *)out_frame) + size >= MAX_FRAME_SIZE) return false;
       if (comma) *dp++ = ',';
       strcpy(dp, name); dp += strlen(name); *dp++ = ':';
       strcpy(dp, value); dp += strlen(value);
@@ -1838,6 +1848,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     char channel_description[80];
     fall_channel.describe(channel_description, sizeof(channel_description));
     append("fall.channel", channel_description);
+    char calibration_status[100];
+    gyro_calibration.describe(millis(), calibration_status, sizeof(calibration_status));
+    append("calibrate", calibration_status);
 #endif
     for (int i = 0; i < sensors.getNumSettings(); i++) {
       if (!append(sensors.getSettingName(i), sensors.getSettingValue(i))) break;
@@ -1857,6 +1870,14 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (np) {
       *np++ = 0; // modify 'cmd_frame', replace ':' with null
 #if ENV_INCLUDE_MPU6050
+      if (strcmp(sp, "calibrate") == 0) {
+        char reply[160];
+        const auto result = controlCalibration(np, reply);
+        Serial.printf("Calibration command: %s\n", reply);
+        if (result == 0) writeOKFrame();
+        else writeErrFrame(result == 2 ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_ILLEGAL_ARG);
+        return;
+      }
       if (strcmp(sp, "fall.channel") == 0) {
         const auto result = setFallChannel(np);
         if (result == 0) writeOKFrame();
@@ -1959,7 +1980,7 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_FACTORY_RESET && memcmp(&cmd_frame[1], "reset", 5) == 0) {
     if (_serial) {
       MESH_DEBUG_PRINTLN("Factory reset: disabling serial interface to prevent reconnects (BLE/WiFi)");
-      _serial->disable(); // Phone app disconnects before we can send OK frame so it's safe here
+      _serial->disable(); // The phone app disconnects before the OK frame can be sent; disabling serial is safe here.
     }
     bool success = _store->formatFileSystem();
     if (success) {
@@ -2109,7 +2130,7 @@ void MyMesh::checkCLIRescueCmd(bool health_only) {
     } else
 #endif
     if (health_only) {
-      Serial.println("Commands: health, motion, beep, get/set fall.channel");
+      Serial.println("Commands: health, motion [raw], calibrate [start/status/show/show saved/save/cancel/reset], beep, battery, battery calibrate <mV>, get/set adc.multiplier, get/set fall.channel, get/set calibrate");
     } else if (memcmp(cli_command, "set ", 4) == 0) {
       const char* config = &cli_command[4];
       if (memcmp(config, "pin ", 4) == 0) {
@@ -2269,7 +2290,7 @@ void MyMesh::checkSerialInterface() {
   size_t len = _serial->checkRecvFrame(cmd_frame);
   if (len > 0) {
     handleCmdFrame(len);
-  } else if (_iter_started              // check if our ContactsIterator is 'running'
+  } else if (_iter_started              // Check whether the ContactsIterator is running.
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {
     ContactInfo contact;

@@ -16,11 +16,35 @@ The same image also provides the MeshCore BLE companion, display and messaging. 
 The sensor uses Wire1 at 100 kHz. OLED/RTC use Wire on GPIO17/18.
 This configuration targets the OLED board, not the TFT firmware environment.
 
+The [MPU-6050/GY-521 source reference](mpu6050_gy521_reference.md) includes the
+supplied register manual and module sheet, maps the current driver settings to
+their registers, and explains module power and pull-up caveats. The module
+sheet's Arduino wiring example does not replace the Heltec connections above.
+
+## Stationary gyroscope calibration
+
+The [calibration guide](gyro_calibration.md) describes USB `calibrate` and the
+MeshCore local `set calibrate start` / `get calibrate` workflow. A 3-second
+countdown precedes 15 seconds of stationary measurement and a separate 2-second
+validation. The device can remain in any fixed orientation; exact leveling is
+unnecessary. Movement restarts collection and sensor errors abort it.
+
+Validated offsets require `calibrate save` before activation. Saved correction
+applies to detector, residual-motion, telemetry and `motion` gyroscope readings;
+`motion raw` exposes scaled readings before correction. Gravity remains present
+in acceleration. This feature does not calibrate the accelerometer or alter fall
+thresholds. Detection pauses and buzzer playback is suppressed during collection,
+then monitoring resumes through normal rearm checks. Calibration requires healthy
+sensor data and is unavailable during active fall/help incidents.
+
 ## Passive buzzer wiring and shared functions
 
-The default external buzzer signal is **GPIO47**, using ESP32 LEDC channel 0 at
-**2000 Hz, 50% duty** while sounding. Initialization sets the output LOW before
-attaching PWM. The GY-521 remains on GPIO4/6 and PRG remains on GPIO0.
+The buzzer is optional. With `buzzer_enabled = true` (default), its signal is
+**GPIO47**, using ESP32 LEDC channel 0 at
+**2000 Hz, 50% duty** while sounding. `buzzer_active_low = true` defaults to a
+LOW-level-trigger driver: initialization sets GPIO47 HIGH before enabling output
+and attaching PWM, and silent periods hold it HIGH. The GY-521 remains on GPIO4/6
+and PRG remains on GPIO0.
 GPIO47 is listed on header J2 in the [Heltec V4 datasheet, pin description](https://resource.heltec.cn/download/WiFi_LoRa_32_V4/datasheet/WiFi_LoRa_32_V4.2.0.pdf)
 and has no other assignment in this firmware's V4 OLED configuration.
 
@@ -28,12 +52,13 @@ Use an **external passive buzzer with a 3.3 V logic-compatible transistor driver
 
 | Connection | Destination |
 | --- | --- |
-| GPIO47 | Driver signal input; HIGH/PWM enables the buzzer |
+| GPIO47 | Driver/module signal input; 50% PWM for sound, HIGH for silence with the default active-low setting |
 | GND | Driver and buzzer supply common ground |
 | Driver/buzzer supply | Supply rated for the selected buzzer and driver |
 | Driver output | Passive buzzer, following the driver's polarity/wiring |
 
-For a discrete low-side NPN driver, connect GPIO47 through a base resistor,
+For a discrete low-side NPN driver, **set `buzzer_active_low = false`**, then
+connect GPIO47 through a base resistor,
 emitter to GND, collector to buzzer minus, and buzzer plus to its rated supply.
 A 1 kÎ© base resistor and 47 kÎ© base-to-emitter pull-down are a starting point for
 a small buzzer; select transistor, resistor and supply ratings for its actual
@@ -41,13 +66,94 @@ current. The pull-down keeps the driver off while the ESP32 resets. An inductive
 magnetic buzzer needs the driver's specified flyback protection. Do not power a
 buzzer or an 8 Î© speaker directly from the GPIO; a speaker needs a suitable
 amplifier. This configuration assumes a passive transducer, not a self-oscillating
-active buzzer or an active-low driver. No specific buzzer model has been tested.
+active buzzer. A three-pin module with its own compatible driver takes GPIO47
+at its signal input; the module already contains the buzzer-driving circuit.
+No specific buzzer model has been bench-tested here.
 
 Edit [`include/HealthNodeConfig.h`](../include/HealthNodeConfig.h) for the pin,
-PWM channel/frequency, beep length, SOS timing, button timing and channel message.
+output enable, trigger polarity, PWM channel/frequency, beep length, SOS timing, button timing
+and channel message. Rebuild and flash the combined image after changing these
+compiled settings; `buzzer_enabled` and `buzzer_active_low` are not USB/BLE runtime commands.
 Check the board pin map before changing GPIO; avoid the sensor, OLED, LoRa,
 GPS, USB, flash and board power-control pins. LEDC channel 0 is reserved for
-this buzzer; do not use `tone()` or another PWM user on that channel.
+this buzzer when enabled; do not use `tone()` or another PWM user on that channel.
+
+### Operation without a buzzer
+
+No electrical presence detection or feedback connection exists for the buzzer.
+With `buzzer_enabled = true`, the firmware generates the configured output even
+when no module is connected. An open GPIO47 connection does not prevent sensor
+initialization, motion monitoring, BLE operation or channel messaging.
+
+To omit buzzer GPIO/PWM initialization and all sound playback, set the following
+at the top of `HealthNodeConfig.h`, then rebuild and flash the combined image:
+
+```cpp
+constexpr bool buzzer_enabled = false;
+```
+
+Disabled mode performs no buzzer GPIO writes, PWM setup or PWM attachment.
+Startup reports `Buzzer disabled; monitoring and channel alerts remain active`;
+the USB `beep` command returns `Buzzer disabled by buzzer_enabled=false`.
+The output pin is not actively held at the configured inactive level in this
+mode. A connected driver therefore requires an appropriate external inactive
+bias, or it must be disconnected. An LED sharing the buzzer signal receives no
+firmware-driven indication in disabled mode.
+
+Motion detection, the fall-response deadline, PRG confirmation/false-alarm
+gestures, location handling and group-channel alerts remain active. Audible SOS
+and battery reminders are omitted. PRG remains reserved for a pending fall even
+without audible feedback. Battery acquisition and USB diagnostics continue.
+
+PWM initialization failure also leaves the rest of the node running; it is not
+a sensor-initialization dependency. `MPU6050 unavailable` and data-ready failures
+remain sensor diagnostics and are not suppressed by disabling the buzzer.
+
+### Buzzer trigger polarity
+
+The setting is beside `buzzer_pin` at the top of `HealthNodeConfig.h`:
+
+```cpp
+constexpr bool buzzer_active_low = true;
+```
+
+| Setting | Matching driver | Silent GPIO47 level | Sounding output |
+| --- | --- | --- | --- |
+| `true` (default) | Module marked "Low Level Trigger" | HIGH | 50% PWM |
+| `false` | HIGH-active driver, including the discrete NPN circuit above | LOW | 50% PWM |
+
+The active-low default corresponds to the PCB marking "Buzzer Module Low Level
+Trigger". The associated product references are the
+[DIYables passive module](https://diyables.io/products/passive-buzzer-module) and
+[Amazon product ID B0DHGP95K4](https://www.amazon.com/dp/B0DHGP95K4).
+The marking identifies the intended input polarity; electrical operation remains
+subject to bench validation.
+
+Polarity applies to startup, ordinary beep completion, SOS gaps and cancellation,
+battery-tone gaps and cancellation, and the inactive interval used when changing
+frequency. With 8-bit LEDC, the driver uses duty 255 for constant HIGH or 0 for
+constant LOW; sounding still uses duty 128. Frequencies, durations, alarm priority,
+PRG gestures and channel messages are unchanged by this setting.
+
+**An incorrect setting holds the driver active during intended silence.** Using
+`false` with a LOW-trigger module leaves its input LOW; using `true` with a
+HIGH-active driver leaves its input HIGH. A genuinely passive buzzer may still
+play tones normally because 50% PWM is unchanged, and a constant active input
+does not necessarily produce a continuous tone. Depending on the driver and
+transducer, the wrong idle level can cause clicks, unnecessary current draw or
+heating. Silence alone does not prove that the driver is off. This setting does
+not convert a self-oscillating active buzzer into a passive one.
+
+Firmware establishes the inactive level when `alarm_buzzer.begin()` runs; it
+cannot guarantee the signal during reset or before initialization. Where the
+module requires external bias, use a suitable 3.3 V-compatible pull-up for a
+LOW-trigger input or pull-down for a HIGH-trigger input. Do not pull GPIO47 up to
+a 5 V module supply. Check the module's actual input circuit and power ratings.
+
+After flashing, bench-check quiet startup, `beep` followed by silence, SOS gaps
+and acknowledgement, and all three battery tones. Check idle signal/current as
+well as audible behavior. Host tests and a successful build do not verify these
+electrical behaviors on the physical module.
 
 [`AlarmBuzzer.h`](../src/helpers/ui/AlarmBuzzer.h) exposes the single shared
 `alarm_buzzer` instance, defined in `examples/companion_radio/HealthMonitor.cpp`:
@@ -63,7 +169,7 @@ alarm_buzzer.beep();     // Default 150 ms; returns immediately.
 `setup()` calls `alarm_buzzer.begin()` once. `MyMesh::pollFallResponse()` services
 `alarm_buzzer.loop()` every loop; callers must not add delays or their own busy
 loops. The API also supplies `startSOS()` and `stop()` for the fall-response owner.
-`beep()` returns false if PWM initialization failed or an SOS/battery sequence is active. The
+`beep()` returns false if output is disabled, PWM initialization failed, or an SOS/battery sequence is active. The
 USB serial command `beep` tests just the sound without creating a
 fall event or sending a channel acknowledgement.
 
@@ -123,9 +229,11 @@ gaps; it never intentionally shortens the five-second silence.
 The alarm remains latched until a valid acknowledgement or restart, even if the
 sensor disconnects or the radio fails. Other beeps cannot interrupt it. The initial
 possible-fall alert and the later assistance request are independent group-channel
-events. Acknowledging does not recall the initial alert or cancel its retries.
+events. Triple-press confirmation leaves the initial alert's retries active.
+An accepted false-alarm double press cancels that incident's initial-alert retries
+and queued automatic warnings; already transmitted messages cannot be recalled.
 
-To acknowledge, press and release **PRG three separate times**:
+To confirm a fall/request assistance, press and release **PRG three separate times**:
 
 - Each press must be shorter than `long_press_ms = 1000`, matching the existing
   Heltec `MomentaryButton` constructor. A press lasting 1000 ms or longer cancels
@@ -135,8 +243,30 @@ To acknowledge, press and release **PRG three separate times**:
 - Both edges must remain stable for `debounce_ms = 25`. The window uses edge
   timestamps, so a release exactly at 3000 ms can be confirmed 25 ms later.
 - Only clicks after the fall count. A button already held when the fall is
-  detected must first be released, then clicked three times. Alarm clicks do not
+  detected must first be released, then begin a new gesture. Alarm clicks do not
   navigate the companion UI. Very fast clicks missed by polling cannot count.
+
+For a false alarm, press and release **PRG twice within one second**:
+
+- `false_alarm_click_window_ms = 1000` measures first observed press-down to second
+  observed release, inclusive; both presses and releases must pass the same 25 ms debounce.
+- The double press stays pending until the full `click_window_ms = 3000` from
+  first press-down has closed. SOS and PRG ownership continue during this wait.
+  A valid third release within three seconds takes priority, including a release
+  exactly at the boundary whose debounce completes afterward.
+- A debounced third press cancels the double candidate. If that press is held
+  for a second or released too late, neither response is accepted; SOS continues
+  and a fresh gesture can be attempted. Bounce alone cannot create a third click.
+- A qualifying double resolves on the first service pass after the window closes,
+  once any relevant transition has settled. It stops SOS and queues
+  `User Confirms False Alarm | lat=37.123456, lon=-122.654321` or
+  `User Confirms False Alarm | HOME` using `false_alarm_message` and the normal
+  location provider/fallback. This is the wearer's report, not sensor verification.
+- False-alarm responses work before or after the automatic warning. A pending
+  double does not extend the 30-second response deadline; if the warning becomes
+  due during that wait, the later accepted false alarm supersedes it.
+- Local cancellation works despite radio failure or outbox backpressure. Monitoring,
+  the detector's cooldown/rearm, and the normal idle PRG behavior remain unchanged.
 
 Before automatic escalation, the accepted third release silences SOS immediately
 and creates an assistance event with bounded channel retries. The configured UTF-8 text is
@@ -151,11 +281,11 @@ The sender appends coordinates or the UTF-8 `DefaultLocation` constant from
 [`HealthNodeConfig.h`](../include/HealthNodeConfig.h), initialized as `u8"HOME"`:
 
 ```text
-Node name: Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-122.654321
-Node name: Fall Detected & User Has Requested Assistance | HOME
+Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-122.654321
+Fall Detected & User Has Requested Assistance | HOME
 ```
 
-Without three accepted presses by **30 seconds after detection**, the firmware
+Without an accepted response by **30 seconds after detection**, the firmware
 automatically sends that assistance+location text followed by
 ` | USER COULD NOT CONFIRM THEIR CONDITION`. If fresh samples instead establish
 quiet for the **final 10 continuous seconds**, it appends
@@ -167,7 +297,8 @@ Either warning leaves SOS running without an elapsed-time cutoff. Three accepted
 presses afterward stop SOS and send the standalone `USER HAS CONFIRMED FALL`,
 even if earlier delivery failed. This supersedes queued automatic-warning retries
 and unsent warning parts, while an already-transmitting packet finishes normally.
-The original `Possible fall` delivery remains independent. See the
+The original `Possible fall` delivery remains independent for triple presses;
+a false-alarm response also retires that incident's initial alert. See the
 [directive table and tuning settings](message_delivery_changes.md#post-fall-response-directives).
 
 The query uses the provider's latest reported valid fix and does not wait for a
@@ -183,9 +314,9 @@ Configured advertisement coordinates are not used as a substitute for GPS.
 
 The location is appended once, leaving `ack_message` unchanged. The event text
 and selected location are frozen for retries, preventing repeated suffixes. This
-applies to the assistance message; the initial channel alert retains its peak-value
-text format. The button input reports a request for assistance, not a
-medical assessment of the wearer.
+applies to assistance and false-alarm messages; the initial channel alert retains its peak-value
+text format. The button input reports the wearer's assistance request or false-alarm
+confirmation; it does not assess their condition.
 
 Edit `ack_message` in `HealthNodeConfig.h` and rebuild to change the assistance
 text. Select the channel through `set fall.channel public #name` or
@@ -195,14 +326,15 @@ for key formats, persistence and client setup. The default is public **#falldete
 its key is the first 16 bytes of SHA256 of that exact name, including `#`:
 `e92ddcbf922343dff181fb4948371236`.
 
-Both message streams use the selected group channel. Each incident and queued
+Both message streams omit the node-name prefix and use group texts on the
+selected public or private channel, never direct messages. Each incident and queued
 message retains its original destination across changes. Receiving companions
 need the matching key and radio settings. Companion channel slot numbers are
 local to each companion and are not radio destinations.
 
 The sender uses an unscoped flood with adjustable `ack_path_hash_size`, on the
 node's existing frequency, bandwidth, spreading factor and coding rate. Channel
-text is limited to **160 UTF-8 bytes including `node name: ` and the location suffix**.
+text is limited to **160 UTF-8 bytes including any location suffix and multipart label**.
 An automatic warning that does not fit uses two labelled messages: the standalone
 warning first, then assistance+location. No standalone warning begins with ` | `;
 that spacer is inserted only when appending. If an individual part cannot fit,
@@ -219,11 +351,11 @@ repeater deduplication; receiving companions may display duplicate text.
 Exhaustion, missing repeats, and oversize text remain visible through serial and
 `health`; these outcomes do not change SOS. It stays active after an automatic
 warning and stays silenced after a user acknowledgement. `part_failed=1` retains
-a failed part even if a later part succeeds. Idle triple clicks never send this message.
+a failed part even if a later part succeeds. Idle double or triple clicks never send a fall-response message.
 See [message-delivery directives and adjustment points](message_delivery_changes.md).
 
 [`FallResponse.h`](../examples/companion_radio/health/FallResponse.h) owns the latch and
-button gate; [`TripleClick.h`](../src/helpers/ui/TripleClick.h) owns gesture timing;
+button gate; [`FallButtonGesture.h`](../src/helpers/ui/FallButtonGesture.h) owns gesture timing;
 [`BuzzerPattern.h`](../src/helpers/ui/BuzzerPattern.h) owns sound timing;
 [`FallAckSender.h`](../examples/companion_radio/health/FallAckSender.h) provides the channel
 send function and [`FallAckMessage.h`](../examples/companion_radio/health/FallAckMessage.h)
@@ -244,6 +376,9 @@ coalesce into an already-pending assistance message without restarting its retry
 budget. These policies suppress duplicate notifications, not sensor analysis.
 
 ## Build and run
+
+For an already flashed device, the [USB serial debugging guide](usb_serial_debugging.md)
+covers Windows PowerShell and Linux monitoring without another build or upload.
 
 With PlatformIO installed, from the `SeniorHealthNode-MC` folder:
 
@@ -286,17 +421,21 @@ explains retries, duplicate text, missing repeat evidence, and validation limits
 
 ## Polling and rule customization
 
-`src/helpers/sensors/MPU6050.h` reads a complete 14-byte acceleration/temperature/
-gyro sample every 20 ms when the main loop can run (nominal 50 Hz). It configures
-the device for +/-8 g, +/-500 degrees/second and filtered 50 Hz sampling. Failed
+`src/helpers/sensors/MPU6050.h` polls a 15-byte burst every 20 ms when the main
+loop can run (nominal 50 Hz): data-ready status followed by the 14-byte
+acceleration/temperature/gyro sample. Only a complete burst with DATA_RDY_INT set
+reaches the detector. It configures the device for +/-8 g, +/-500 degrees/second
+and filtered 50 Hz sampling, then checks each configuration register by readback. Failed
 or partial reads invalidate the sample immediately. The next read retries after
 20 ms; three consecutive failures trigger reinitialization on the next short
-retry. Only failed initialization uses the five-second missing-device backoff.
+retry. A working bus that reports no new data for one second enters the same
+failure/recovery path. Only failed initialization, including a configuration
+readback mismatch, uses the five-second missing-device backoff.
 Successful initialization still waits 100 ms for settling; the rule independently
 requires two seconds of quiet after invalid data. Retry timers are configurable
 in `HealthNodeConfig.h`.
 The loop is cooperative; other firmware work can delay polls, so brief events
-can be missed. INT and FIFO are not used. `health` reports the maximum completed
+can be missed. The INT pin and FIFO are not used. `health` reports the maximum completed
 fresh-sample interval, intervals exceeding the 100 ms detector guard, and a fault
 after five seconds without fresh valid motion. Recovery does not bypass quiet
 settling, and the gap guard is unchanged. See [the health diagnostics](message_delivery_changes.md).

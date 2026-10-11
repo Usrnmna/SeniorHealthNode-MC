@@ -12,8 +12,9 @@
 
 static std::vector<uint8_t> mpuResponse(uint8_t reg, uint8_t count) {
   if (reg == 0x75) return {0x68};
+  if (count == 1) return {Wire1.registers[reg]};
   std::vector<uint8_t> bytes(count, 0);
-  if (count == 14) bytes[4] = 0x10; // 1 g upright.
+  if (reg == 0x3A && count == 15) { bytes[0] = 1; bytes[5] = 0x10; } // New sample, 1 g.
   return bytes;
 }
 
@@ -50,6 +51,89 @@ TEST(SensorTiming, RecoveryTimersWorkAcrossMillisWrap) {
   Wire1.response = [](uint8_t, uint8_t) { return std::vector<uint8_t>{}; };
   EXPECT_FALSE(sensor.poll(start + 120));
   Wire1.response = mpuResponse; EXPECT_TRUE(sensor.poll(start + 140));
+}
+
+TEST(SensorTiming, DataReadyGatesEvidenceEvenWhenAxesAreIdentical) {
+  Wire1 = TwoWire{};
+  bool data_ready = true;
+  Wire1.response = [&](uint8_t reg, uint8_t count) {
+    auto bytes = mpuResponse(reg, count);
+    if (reg == 0x3A) bytes[0] = data_ready ? 1 : 0x10; // Other status is not data-ready.
+    return bytes;
+  };
+  MPU6050Sensor sensor;
+  sensor.poll(0); ASSERT_TRUE(sensor.poll(100));
+  EXPECT_FLOAT_EQ(sensor.values.az, 1.0f);
+  data_ready = false;
+  EXPECT_FALSE(sensor.poll(120));
+  EXPECT_TRUE(sensor.valid); // Cache remains available; not new detector evidence.
+  data_ready = true;
+  EXPECT_TRUE(sensor.poll(140)); // Identical stationary axes can still be a new sample.
+  EXPECT_EQ(Wire1.writes.back(), std::vector<uint8_t>{0x3A});
+}
+
+TEST(SensorTiming, MissingDataReadyInvalidatesAndReinitializesAcrossWrap) {
+  Wire1 = TwoWire{}; Wire1.response = mpuResponse;
+  MPU6050Sensor sensor; const uint32_t start = UINT32_MAX - 200;
+  sensor.poll(start); ASSERT_TRUE(sensor.poll(start + 100));
+  Wire1.response = [](uint8_t reg, uint8_t count) {
+    auto bytes = mpuResponse(reg, count);
+    if (reg == 0x3A) bytes[0] = 0;
+    return bytes;
+  };
+  sensor.poll(start + 100 + HealthNodeConfig::motion_data_timeout_ms - 1);
+  EXPECT_TRUE(sensor.valid);
+  for (unsigned i = 0; i < HealthNodeConfig::motion_fast_failures; ++i) {
+    EXPECT_FALSE(sensor.poll(start + 120 + HealthNodeConfig::motion_data_timeout_ms + 20*i));
+    EXPECT_FALSE(sensor.valid);
+  }
+  Wire1.response = mpuResponse;
+  const auto recovery = start + 120 + HealthNodeConfig::motion_data_timeout_ms +
+                        20*HealthNodeConfig::motion_fast_failures;
+  EXPECT_FALSE(sensor.poll(recovery)); // Configuration must be verified again.
+  EXPECT_TRUE(sensor.poll(recovery + 100));
+}
+
+class MpuConfigReadback : public ::testing::TestWithParam<uint8_t> {};
+TEST_P(MpuConfigReadback, MismatchBlocksSamplesUntilSuccessfulRetry) {
+  Wire1 = TwoWire{};
+  Wire1.response = [&](uint8_t reg, uint8_t count) {
+    auto bytes = mpuResponse(reg, count);
+    if (reg == GetParam() && count == 1) {
+      bytes[0] ^= (reg == 0x1B || reg == 0x1C) ? 0x08 : (reg == 0x37 ? 0x10 : 0x01);
+    }
+    return bytes;
+  };
+  MPU6050Sensor sensor;
+  EXPECT_FALSE(sensor.poll(0)); EXPECT_FALSE(sensor.valid);
+  const auto requests = Wire1.requests;
+  EXPECT_FALSE(sensor.poll(4999)); EXPECT_EQ(Wire1.requests, requests);
+  Wire1.response = mpuResponse;
+  EXPECT_FALSE(sensor.poll(5000)); EXPECT_TRUE(sensor.poll(5100));
+}
+INSTANTIATE_TEST_SUITE_P(EveryRequiredRegister, MpuConfigReadback,
+    ::testing::Values(0x6B, 0x6C, 0x1A, 0x19, 0x1B, 0x1C, 0x37, 0x38));
+
+TEST(SensorTiming, ReadbackBusFailureCannotBeMistakenForCorrectConfiguration) {
+  Wire1 = TwoWire{};
+  Wire1.response = [](uint8_t reg, uint8_t count) {
+    return reg == 0x1C ? std::vector<uint8_t>{} : mpuResponse(reg, count);
+  };
+  MPU6050Sensor sensor;
+  sensor.poll(0); EXPECT_FALSE(sensor.poll(100)); EXPECT_FALSE(sensor.valid);
+}
+
+TEST(SensorTiming, ReadbackIgnoresReservedBitsButChecksFilterAndInterruptControl) {
+  Wire1 = TwoWire{};
+  Wire1.response = [](uint8_t reg, uint8_t count) {
+    auto bytes = mpuResponse(reg, count);
+    if (reg == 0x1A) bytes[0] |= 0xC0;
+    if (reg == 0x38) bytes[0] |= 0xE6;
+    return bytes;
+  };
+  MPU6050Sensor sensor; sensor.poll(0); EXPECT_TRUE(sensor.poll(100));
+  EXPECT_EQ(Wire1.registers[0x37] & 0x10, 0); // Reads of other registers cannot clear status.
+  EXPECT_EQ(Wire1.registers[0x38] & 0x01, 1); // Data-ready generation enabled.
 }
 
 TEST(SensorTiming, AhtStuckBusyHasBoundedInitializationAndMeasurement) {

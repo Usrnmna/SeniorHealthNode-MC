@@ -37,7 +37,7 @@ Use GitHub's private vulnerability reporting instead:
 
 ### What to include
 
-A useful report tells us:
+A useful report includes:
 - Which component or file is affected
 - What an attacker can do (impact) and under what conditions
 - A minimal reproduction case or proof-of-concept if you have one
@@ -48,13 +48,12 @@ than no report.
 
 ## What to expect
 
-This is a volunteer-maintained open-source project. We will do our best to
-respond in a reasonable timeframe, but cannot commit to specific deadlines.
+This is a volunteer-maintained open-source project. Reports are handled on a
+best-effort basis; specific response deadlines cannot be guaranteed.
 
-We ask that you give us a fair opportunity to investigate and address the
-issue before any public disclosure. If you have not heard back after
-**90 days**, feel free to follow up or proceed with disclosure at your
-discretion.
+An opportunity to investigate and address the issue is requested before public
+disclosure. If no response has been received after **90 days**, follow-up or
+public disclosure remains at the reporter's discretion.
 
 ## Scope
 

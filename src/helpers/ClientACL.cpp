@@ -40,7 +40,7 @@ void ClientACL::load(FILESYSTEM* fs, const mesh::LocalIdentity& self_id) {
         if (!success) break; // EOF
 
         c.id = mesh::Identity(pub_key);
-        self_id.calcSharedSecret(c.shared_secret, pub_key);  // recalculate shared secrets in case our private key changed
+        self_id.calcSharedSecret(c.shared_secret, pub_key);  // Recalculate shared secrets in case the local private key changed.
         if (num_clients < MAX_CLIENTS) {
           clients[num_clients++] = c;
         } else {

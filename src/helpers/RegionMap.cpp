@@ -2,7 +2,7 @@
 #include <helpers/TxtDataHelpers.h>
 #include <SHA256.h>
 
-// helper class for region map exporter, we emulate Stream with a safe buffer writer.
+// Region map export helper that implements Stream with a bounded buffer writer.
 
 class BufStream : public Stream {
 public:

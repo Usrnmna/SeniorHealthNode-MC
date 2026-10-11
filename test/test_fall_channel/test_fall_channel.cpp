@@ -159,7 +159,7 @@ TEST(FallChannelSnapshot, QueuedPartsAndRetriesRetainOriginalChannel) {
   ChannelLink link; AssistanceDelivery delivery; FallNoticeOutbox outbox;
   auto selected = parse(private_value);
   const auto message = FallNoticeMessage::build(FallNotice::NoResidualMovement,
-      "A moderately long node name", true, -90, -180);
+      false, 0, 0, "A long fallback location that requires a separate assistance message part");
   ASSERT_EQ(2u, message.count);
   ASSERT_TRUE(outbox.enqueue(FallNotice::NoResidualMovement, 1, message, selected));
   selected = parse("public #other");

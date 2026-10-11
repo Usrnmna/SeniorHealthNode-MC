@@ -2,21 +2,24 @@
 
 ## Source and applicability
 
-Primary source: Heltec Automation, `WiFi_LoRa_32_V4.3.1_Datasheet.pdf`, 16 pages,
-supplied locally at
-`C:\Users\usrnm\Desktop\meshcore_project\WiFi_LoRa_32_V4.3.1_Datasheet.pdf`.
+Primary source: Heltec Automation, `WiFi_LoRa_32_V4.3.1_Datasheet.pdf`, 16 pages.
 The revision table on page 2 identifies V4.3.1, dated 2026-06-16. Footers retain
 older revision/date labels, including Rev 1.1.0, Rev 1.4 and Rev 4.2.0.
 Page references below use the primary PDF's one-based page order unless an
 older source is explicitly named.
 
-Secondary source: `WiFi_LoRa_32_V4.2.0.pdf`, 17 pages, supplied in the same
-directory, with revision-table date 2025-09-11. It is retained only for explicitly
+Secondary source: `WiFi_LoRa_32_V4.2.0.pdf`, 17 pages,
+with revision-table date 2025-09-11. It is retained only for explicitly
 identified comparisons and details absent from the newer PDF.
+
+Electrical reference: Heltec's separate
+[HTIT-WB32LAF V4.3 schematic](https://resource.heltec.cn/download/WiFi_LoRa_32_V4/Schematic/HTIT-WB32LAF_V4.3.pdf),
+one sheet, inspected on 2026-10-06. Its battery-divider and RF-control nets
+resolve the two datasheet errors below for the ESP32-S3R2 V4.3 board.
 
 This document records manufacturer specifications for project reference, with
 source inconsistencies called out below. It does not establish measured behavior
-of the assembled SeniorHealthNode. Both source PDFs remain at their supplied paths.
+of the assembled SeniorHealthNode.
 
 SeniorHealthNode uses one `heltec_v4_companion_radio_ble` image with BLE companion
 functionality and fall detection together. The [project pin guide](pin_schematic.md)
@@ -116,7 +119,8 @@ typical. Neither figure describes continuous BLE companion and motion monitoring
 
 ## Header positions and onboard signals
 
-Source: pages 8-11, tables 2.2.1-2.2.3. Header positions below are distinct from
+Source: pages 8-11, tables 2.2.1-2.2.3, with V4.3 FEM roles corrected from the
+separate schematic. Header positions below are distinct from
 ESP32 GPIO numbers. Use the page 8 orientation diagram before locating pins.
 Alternative ESP32 IOMUX functions do not mean an onboard-connected pin is free.
 
@@ -126,7 +130,7 @@ Alternative ESP32 IOMUX functions do not mean an onboard-connected pin is free.
 | 2 | 5V | 3V3 |
 | 3 | Ve | 3V3 |
 | 4 | Ve | GPIO37, ADC control |
-| 5 | GPIO44, UART0 RX | GPIO46; diagram labels FEM_PA, see discrepancy below |
+| 5 | GPIO44, UART0 RX | GPIO46; not V4.3 KCT8103L CTX |
 | 6 | GPIO43, UART0 TX | GPIO45 |
 | 7 | RST / CHIP_PU | GPIO42, GNSS reset |
 | 8 | GPIO0, PRG button | GPIO41, GNSS PPS |
@@ -134,10 +138,10 @@ Alternative ESP32 IOMUX functions do not mean an onboard-connected pin is free.
 | 10 | GPIO35, LED | GPIO39, GNSS TX |
 | 11 | GPIO34, GNSS control in pin diagram | GPIO38, GNSS RX |
 | 12 | GPIO33 | GPIO1, battery ADC |
-| 13 | GPIO47 | GPIO2, FEM_EN |
+| 13 | GPIO47 | GPIO2, V4.3 KCT8103L CSD |
 | 14 | GPIO48 | GPIO3 |
 | 15 | GPIO26 | GPIO4 |
-| 16 | GPIO21, OLED reset | GPIO5 |
+| 16 | GPIO21, OLED reset | GPIO5, V4.3 KCT8103L CTX; reserved onboard |
 | 17 | GPIO20, USB D+ | GPIO6 |
 | 18 | GPIO19, USB D- | GPIO7, FEM supply control |
 
@@ -154,12 +158,71 @@ For the project's GY-521 and buzzer assignments, use the
 [firmware-derived pin guide](pin_schematic.md); the manufacturer PDF does not
 specify SeniorHealthNode's external motion-sensor or buzzer wiring.
 
-## Schematic, dimensions and unresolved source differences
+## Corrected battery equation and RF control pins
+
+Use the separate official V4.3 schematic for these connections. The source
+datasheet retains errors; the corrected project interpretation is:
+
+| Item | Correct V4.3 meaning | Schematic evidence |
+| --- | --- | --- |
+| Battery divider | `VADC = VBAT * 100 / 490`; `VBAT = VADC * 4.9` | R27 = 390 kohm above ADC_IN; R28 = 100 kohm to GND |
+| Battery ADC | GPIO1 reads ADC_IN; GPIO37 HIGH enables the divider | U7 GPIO1 / ADC_IN and GPIO37 / ADC_Ctrl, Q5/Q6 switching |
+| FEM chip enable | GPIO2 = KCT8103L CSD | U7 GPIO2 / PA_CSD to U8 CSD |
+| FEM transmit/receive control | GPIO5 = KCT8103L CTX | U7 GPIO5 / PA_CTX to U8 CTX |
+| Older-board control | GPIO46 CPS is for V4.2 GC1109 | Older V4.2 schematic and the separate GC1109 firmware branch |
+
+The V4.3.1 page 10 formula incorrectly puts the attenuation factor on the
+battery side: `VBAT = 100 / (100+390) * VADC_IN1`. The correct relationship
+gives **3.92 V battery for 0.80 V at the ADC pin**, before resistor tolerances
+and measurement errors. These are physical voltages, not raw ADC counts.
+
+The page 8 `FEM_PA` label on GPIO46 must not be applied to V4.3 KCT8103L CTX.
+Table 2.2.2 omits the GPIO5 FEM role. The firmware already uses the schematic's
+GPIO2/5 assignments, with GPIO2/46 retained only for older GC1109 boards.
+See [board definitions](../variants/heltec_v4/platformio.ini) and
+[FEM control](../variants/heltec_v4/LoRaFEMControl.cpp). GPIO5 is not free for an
+external sensor on the V4.3 board, even though the datasheet table omits its role.
+
+### Battery conversion in the firmware
+
+[`HeltecV4Board`](../variants/heltec_v4/HeltecV4Board.cpp) averages eight raw
+10-bit `analogRead()` counts with the divider enabled. Its existing conversion is:
+
+```text
+battery_mV = raw_average * (3.3 / 1024.0) * adc_multiplier * 1000
+default adc_multiplier = 5.42
+```
+
+The factor **5.42** is the existing effective raw-count scale, combining the
+divider and ADC correction in this approximate conversion. It is not a resistor
+ratio or a verified calibration for an individual board. `analogRead()` returns
+uncalibrated counts, not measured ADC-pin volts, so the nominal `3.3 / 1024`
+conversion and the physical divider ratio must not be conflated.
+
+The firmware preserves the existing default and meaning of `adc.multiplier`: changing only
+5.42 to 4.9 would reduce the reported voltage by about 9.6%, affecting battery
+warnings and shutdown. A calibrated ADC-pin millivolt reading would instead use
+the physical multiplier 4.9. The current firmware does not use that API.
+
+For a board-specific adjustment, compare a stable, nonzero reported battery
+voltage with a meter at the battery terminals under the same conditions:
+`new_multiplier = current_multiplier * measured_voltage / reported_voltage`.
+Use the [USB battery diagnostics and calibration workflow](cli_commands.md#battery-diagnostics-and-calibration-usb).
+`battery` shows cached raw counts and their age; `battery calibrate <meter_mV>`
+suggests a multiplier without applying it. `set adc.multiplier <value>` saves
+and applies an explicit selection. Older companion preferences without this
+setting use the board default; `set adc.multiplier 0` restores that selection.
+Check multiple battery voltages; a single scaling adjustment does not prove
+ADC accuracy over its range. Staged acquisition timing and warning thresholds
+are unchanged.
+
+## Other source differences and dimensions
 
 The V4.3.1 PDF has no embedded schematic. Its contents page has broken bookmark
 references for schematic and frequency-plan sections, page 6 is otherwise blank,
-and page 16 offers a schematic resource link. That linked resource was not
-retrieved for this update. The **older V4.2 PDF**, page 15, contains the V4.2
+and page 16 offers a schematic resource link. The separate official V4.3
+schematic linked above was retrieved and inspected for the battery and FEM
+corrections. The **older V4.2 PDF**, page 15, contains the V4.2
 schematic, including ESP32-S3R2, SX1262, GC1109 RF front end, CN3165 charger,
 power switching, battery divider, USB, flash, OLED and GNSS connections.
 That older schematic is not evidence of the complete V4.3 netlist.
@@ -169,21 +232,6 @@ That older schematic is not evidence of the complete V4.3 netlist.
   [board configuration](../variants/heltec_v4/platformio.ini) defines
   `PIN_VEXT_EN_ACTIVE=HIGH`, so the documentation now agrees. The older V4.2
   page 12 said LOW. This is documentary agreement, not a physical polarity test.
-- **RF front-end label:** the V4.3.1 page 8 diagram still labels GPIO46
-  `FEM_PA`, while table 2.2.2 lists GPIO46 without that function and GPIO5
-  without a FEM function. Current firmware assigns KCT8103L CSD/CTX to GPIO2/5
-  and older GC1109 CSD/CPS to GPIO2/46; see
-  [board definitions](../variants/heltec_v4/platformio.ini) and
-  [FEM control](../variants/heltec_v4/LoRaFEMControl.cpp). The new PDF alone
-  does not resolve that revision-specific difference; do not move the V4.3
-  control signal to GPIO46 based on this diagram.
-- **Battery equation:** page 10 still prints `VBAT = 100 / (100+390) * VADC_IN1`.
-  The **older V4.2 schematic**, page 15, shows 390 kohm above the ADC tap and
-  100 kohm below it. From that
-  divider, the inferred relationship is `VADC = VBAT * 100 / 490`, hence
-  `VBAT = VADC * 4.9`. The printed equation appears reversed. This is a
-  schematic-based calculation, not an ADC calibration or physical measurement.
-  V4.3.1 page 10 specifies GPIO37 HIGH to enable the measurement circuit.
 - **Display naming:** table 3.1 identifies SSD1315. The project pin guide calls
   its software interface SSD1306; the controller specification and driver
   interface name should remain distinguishable.
@@ -194,5 +242,5 @@ That older schematic is not evidence of the complete V4.3 netlist.
 
 The primary document's manufacturer resource links are on page 16. No physical wiring,
 power draw, RF output, board revision, or enclosure fit was verified during this
-reference import. Resolve the specific board revision and these source
-differences before using them to justify hardware or firmware changes.
+reference work. Schematic verification establishes documented connections,
+not physical testing or calibration of an individual board.

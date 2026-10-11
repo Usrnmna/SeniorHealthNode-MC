@@ -5,6 +5,7 @@ void HeltecV4Board::pollBattery() {
   battery_reader.poll(millis(), HealthNodeConfig::low_battery_poll_ms,
       HealthNodeConfig::battery_settle_ms, HealthNodeConfig::battery_adc_samples,
       [](bool on) { digitalWrite(PIN_ADC_CTRL, on ? HIGH : LOW); },
+      // Keep raw counts: getBattMilliVolts() applies the adjustable ADC scale.
       []() { analogReadResolution(10); return analogRead(PIN_VBAT_READ); });
 }
 #endif
@@ -50,9 +51,13 @@ void HeltecV4Board::begin() {
   }
 
   uint16_t HeltecV4Board::getBattMilliVolts()  {
+    // Both paths use raw 10-bit ADC counts, not measured ADC-pin millivolts.
+    // Battery mV = raw_average * (3.3 / 1024) * adc_mult * 1000.
+    // adc_mult includes ADC correction; the physical divider alone is 4.9.
+    // Do not use the reversed battery equation printed in the V4.3.1 datasheet.
 #if ENV_INCLUDE_MPU6050
     // Cache only: telemetry and CLI cannot trigger another conversion or delay.
-    return (adc_mult * (3.3 / 1024.0) * battery_reader.rawAverage()) * 1000;
+    return BatteryCalibration::milliVolts(battery_reader.rawAverage(), adc_mult);
 #else
     analogReadResolution(10);
     digitalWrite(PIN_ADC_CTRL, HIGH);
@@ -65,7 +70,7 @@ void HeltecV4Board::begin() {
 
     digitalWrite(PIN_ADC_CTRL, LOW);
 
-    return (adc_mult * (3.3 / 1024.0) * raw) * 1000;
+    return BatteryCalibration::milliVolts(raw, adc_mult);
 #endif
   }
 

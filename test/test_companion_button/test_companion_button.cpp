@@ -60,6 +60,21 @@ TEST_F(CompanionButton, HeldAlarmPressCannotBecomeUiShutdown) {
   EXPECT_EQ(sample(2200, false, false), BUTTON_EVENT_NONE);
 }
 
+TEST_F(CompanionButton, DoubleClickWaitKeepsUiSuppressedAndResolvesOnlyAfterWindow) {
+  ASSERT_TRUE(fall.onFall(100, false));
+  unsigned responses = 0;
+  for (uint32_t t = 110; t <= 4000; t += 10) {
+    const bool pressed = (t >= 300 && t < 500) || (t >= 800 && t < 1000);
+    const bool owned = fall.alarmActive();
+    if (fall.updateButton(t, pressed)) { ++responses; EXPECT_GT(t, 3300u); }
+    EXPECT_EQ(sample(t, pressed, owned), BUTTON_EVENT_NONE);
+    if (t <= 3300) EXPECT_TRUE(fall.alarmActive());
+  }
+  EXPECT_EQ(1u, responses); EXPECT_TRUE(fall.falseAlarmConfirmed());
+  sample(4300, true, false); sample(4400, false, false);
+  EXPECT_EQ(sample(4700, false, false), BUTTON_EVENT_CLICK);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

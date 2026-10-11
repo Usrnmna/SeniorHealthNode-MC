@@ -10,8 +10,8 @@ pin numbers. Arrows show signal direction; `<-->` is bidirectional.
 Onboard connections are already wired on the Heltec PCB.
 The [manufacturer specification reference](heltec_v4_spec_reference.md) records
 the supplied V4.3.1 datasheet, which specifies GPIO36 HIGH for Vext and agrees
-with this firmware. It also identifies remaining battery-equation and FEM-label
-discrepancies and separates older V4.2 schematic evidence.
+with this firmware. The separate official V4.3 schematic resolves the datasheet's
+battery-equation and FEM-label errors; the reference records the corrections.
 
 ## At-a-glance connection chart
 
@@ -68,6 +68,11 @@ in `pins_arduino.h` are not this firmware's external sensor connections.
 
 ## External motion sensor and buzzer
 
+The buzzer connection is optional. `buzzer_enabled = false` skips GPIO47/PWM
+configuration and playback; it does not disable the sensor or fall responses.
+See [operation without a buzzer](gy521_sensor.md#operation-without-a-buzzer)
+for output-bias requirements and configuration.
+
 ```text
 HELTEC / ESP32-S3                         GY-521 MODULE (MPU6050)
 3V3 ------------------------------------ VCC
@@ -80,13 +85,13 @@ GND ------------------------------------ AD0   [I2C address 0x68]
                                          XCL   [unconnected]
 
 HELTEC / ESP32-S3                         PASSIVE BUZZER DRIVER
-GPIO47 (PWM) --------------------------> IN    [3.3 V logic, HIGH = on]
+GPIO47 (PWM) --------------------------> IN    [3.3 V logic, LOW-trigger default]
 GND ------------------------------------ GND
 Buzzer-rated supply -------------------- V+
                                          OUT -- passive buzzer
                                          (per driver's output wiring)
 
-Discrete NPN alternative:
+Discrete NPN alternative (set buzzer_active_low = false):
 
 GPIO47 ----[base resistor]----+---- B
                              |     Q1 NPN
@@ -96,10 +101,18 @@ GND -------------------------+                buzzer (+) -- rated supply
 ```
 
 Use module header labels for the GY-521, not bare MPU6050 package pads.
+See the [supplied MPU-6050/GY-521 reference](mpu6050_gy521_reference.md) for the
+module regulator, onboard pull-ups, AD0 behavior and driver register settings.
 All external grounds join Heltec GND; I2C pull-ups must go to 3.3 V.
 The existing buzzer guide suggests 1 kohm base and 47 kohm pull-down resistors
 as starting values; size the driver for the selected buzzer. An inductive buzzer
 requires appropriate flyback protection. GPIO47 supplies a control signal only.
+
+`buzzer_active_low = true` is the default for a LOW-level-trigger module: GPIO47
+is HIGH during silence and supplies 50% PWM during tones. Set it to `false` for
+the HIGH-active NPN alternative, then rebuild and flash. The wrong setting can
+leave the driver energized during intended silence even if tones sound normal.
+See [trigger polarity, reset bias and incorrect-setting effects](gy521_sensor.md#buzzer-trigger-polarity).
 
 ## Onboard display, radio and controls
 
@@ -135,10 +148,17 @@ GPIO1  <-------------------------------- Battery voltage divider output
 
 Power and ground for onboard devices are supplied by the PCB. Battery voltage
 reaches GPIO1 through the onboard divider, not by a direct battery connection.
+The official V4.3 schematic confirms R27=390 kohm and R28=100 kohm, so actual
+battery voltage is **4.9 times the ADC-pin voltage**. The firmware's effective
+raw-count multiplier is a different quantity; see
+[battery conversion](heltec_v4_spec_reference.md#battery-conversion-in-the-firmware).
 RF matching, antenna routing, decoupling and regulator internals are omitted.
 The firmware also supports older V4.2 boards: GC1109 replaces KCT8103L, with
 GPIO2 to CSD and GPIO46 to CPS; its CTX is controlled by SX1262 DIO2.
 These are alternative board versions, not two front-end chips to connect together.
+The V4.3 schematic confirms GPIO5 as KCT8103L CTX; reserve it for that onboard
+function. The GPIO46 FEM label retained in the V4.3.1 datasheet diagram describes
+the older control assignment and must not override this V4.3 connection.
 
 ## Optional GPS and RTC
 
@@ -223,9 +243,10 @@ No additional charging-status wire is specified here.
 
 This is a firmware-derived connection guide, not a complete PCB netlist of every
 power, USB, memory or protection IC. The supplied V4.3.1 datasheet contains no
-embedded schematic; the older V4.2 PDF includes a V4.2 schematic. See the
-[specification reference](heltec_v4_spec_reference.md). Neither establishes the
-complete V4.3 netlist here; those IC package connections are not inferred.
+embedded schematic; Heltec publishes a separate V4.3 schematic. Its battery
+divider and FEM nets have been checked against this guide; see the
+[specification reference](heltec_v4_spec_reference.md). This guide remains a
+selected connection summary, not a transcription of the complete PCB netlist.
 Hardware wiring and operation have not been physically verified.
 
 Sources in this checkout:

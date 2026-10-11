@@ -36,11 +36,18 @@ channels start at 3 in initialization order. Location/environment permission
 masks are still applied at query time. Each cache slot holds up to 64 payload
 bytes; the collector has a configured 6,144-byte task stack, plus RTOS overhead.
 
-## 2. Transient MPU failures
+## 2. MPU sample freshness and recovery
 
 [`MPU6050.h`](../src/helpers/sensors/MPU6050.h), `poll()`:
 
-- Invalidate a failed/partial reading immediately.
+- Read INT_STATUS and the 14 measurement bytes in one 15-byte burst. Accept
+  only a complete burst with DATA_RDY_INT set; a clear flag cannot advance
+  fall or residual-movement evidence. INT remains unconnected.
+- Verify relevant writable bits after each initialization register write,
+  including data-ready enable and its clear-on-status-read policy. A mismatch
+  prevents readiness and uses the failed-initialization backoff.
+- Invalidate a failed/partial reading immediately. One second without new data
+  also invalidates the cache and begins counting read failures, even if I2C works.
 - Retry reads after 20 ms. After three consecutive failures, attempt
   reinitialization on the next short retry.
 - Use five-second backoff only after initialization fails. Successful
@@ -65,10 +72,15 @@ current channel retries, repeater-echo confirmation, and serial health diagnosti
 [`FallResponse.h`](../examples/companion_radio/health/FallResponse.h), `onFall()`, reports
 whether a new SOS must start. An active SOS keeps its existing click progress.
 `updateButton()` requests assistance before escalation or a standalone confirmation
-afterward. `updateDeadline()` selects one automatic warning at 30 seconds using
+afterward. `FallButtonGesture` also recognizes two complete presses within one
+second, then waits for the three-second window to close so a valid third press
+wins. False-alarm acceptance stops SOS and queues the exact text plus location;
+a held/late third press leaves SOS active. `updateDeadline()` selects one automatic warning at 30 seconds using
 independent residual-movement evidence. Neither duplicate detections nor partial
 clicks extend that deadline. `FallNoticeOutbox` retains accepted messages and gives
-late confirmation priority over the same incident's automatic-warning retries.
+fall/false-alarm confirmation priority over the same incident's automatic-warning retries.
+False-alarm acceptance additionally cancels that incident's initial-alert retries.
+A pending double does not postpone the response deadline; monitoring continues.
 If a later detection occurs after the earlier SOS stopped, it starts a new local
 SOS even with an old send pending. See the [response directives](message_delivery_changes.md#post-fall-response-directives).
 
@@ -101,18 +113,31 @@ after completion. `getBattMilliVolts()` returns the cache without hardware I/O.
 reading. The companion UI and telemetry consume the same cached voltage.
 Existing thresholds, warning tones and fall-SOS priority remain intact.
 
+USB `battery` reports cached raw counts, millivolts, sample age and the effective
+multiplier. `battery calibrate <meter_mV>` suggests a correction from a fresh
+sample without applying it. `set adc.multiplier <value>` saves an explicit
+correction in companion preferences and applies it after a successful save.
+Missing settings and `0` select the existing 5.42 board default. These commands
+do not initiate ADC conversions. See the [meter calibration workflow](cli_commands.md#battery-diagnostics-and-calibration-usb).
+
 ## Configuration and validation
 
 [`HealthNodeConfig.h`](../include/HealthNodeConfig.h) exposes retry intervals,
 failure count, environmental refresh/expiry/deadline, task stack, I2C timeout,
-OLED chunk size, ADC settling time and sample count, with configuration guards.
+OLED chunk size, ADC settling time and sample count, fresh-data timeout and
+battery-calibration limits, with configuration guards.
 
 [`test_sensor_timing.cpp`](../test/test_sensor_timing/test_sensor_timing.cpp)
-covers transient/persistent MPU failures, rollover, AHT timeout/short reads,
+covers MPU data-ready gating, configuration readback, transient/persistent
+failures, rollover, AHT timeout/short reads,
 cache expiry/invalidation, byte-preserving replay and capacity, staged ADC
 averaging, detection during SOS, acknowledgment retry coalescing, and OLED chunk
 coverage/fault cancellation. Supporting fakes are in `test/mocks/Wire.h`,
 `esp32-hal-i2c.h`, and `CayenneLPP.h`.
+
+[`test_battery_calibration.cpp`](../test/test_battery_calibration/test_battery_calibration.cpp)
+checks conversion compatibility, meter-input validation, stale/saturated sample
+rejection, sample-age rollover, and preference serialization with older settings.
 
 Reproducible combined-firmware checks are described in [build validation](build-validation.md).
 The timing and fault suites run through `verify.ps1`.

@@ -708,10 +708,9 @@ void UITask::setCurrScreen(UIScreen* c) {
 void UITask::shutdown(bool restart){
 
   #ifdef PIN_BUZZER
-  /* note: we have a choice here -
-     we can do a blocking buzzer.loop() with non-deterministic consequences
-     or we can set a flag and delay the shutdown for a couple of seconds
-     while a non-blocking buzzer.loop() plays out in UITask::loop()
+  /* Shutdown playback can block in buzzer.loop(), with uncertain timing,
+     or use a flag to defer shutdown while UITask::loop() services playback.
+     The implementation below uses blocking playback with a timeout.
   */
   buzzer.shutdown();
   uint32_t buzzer_timer = millis(); // fail-safe shutdown

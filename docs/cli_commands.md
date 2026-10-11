@@ -1,12 +1,17 @@
 # CLI Commands
 
 The local SeniorHealthNode BLE companion supports the fall-channel commands below
-through USB serial and the companion custom-variable protocol over BLE. Its
-`motion`, `health` and `beep` diagnostics remain USB-only. The upstream remote-node
+through USB serial and the companion custom-variable protocol over BLE. Gyroscope
+calibration control/status also uses both interfaces; see the
+[calibration guide](gyro_calibration.md). Its
+`motion`, `health`, `beep`, battery diagnostics and ADC calibration remain USB-only. The upstream remote-node
 reference later in this document does not make its admin, OTA or ACL commands
 local SeniorHealthNode commands.
 
 ## Local USB diagnostics
+
+See the [Windows and Linux USB debugging guide](usb_serial_debugging.md) for
+terminal setup, port permissions, timestamped capture and fault interpretation.
 
 Open the board's serial port at **115200 baud**. CR, LF and CRLF terminate a
 command. These commands remain available while BLE companion services run:
@@ -14,8 +19,17 @@ command. These commands remain available while BLE companion services run:
 | Command | Result |
 | --- | --- |
 | `motion` | Latest valid acceleration axes in g, gyro axes in degrees/s and chip temperature in Celsius, or an MPU6050-unavailable reply. Chip temperature is not body temperature. |
+| `motion raw` | Latest scaled MPU6050 readings before saved gyroscope correction. Acceleration and temperature are identical to `motion`. |
+| `calibrate` | Start a 3-second countdown, 15-second stationary gyroscope measurement and 2-second independent validation; detection pauses during these phases. |
+| `calibrate status` / `calibrate show` / `calibrate show saved` | Inspect progress, pending coefficients or active saved/default coefficients. |
+| `calibrate save` / `calibrate cancel` / `calibrate reset` | Save validated offsets, cancel/discard an attempt, or save zero correction. |
+| `get calibrate` / `set calibrate <action>` | Shared USB/BLE status and control; actions are `start`, `save`, `cancel` and `reset`. |
 | `health` | `fall` and `help` delivery states, `motion` availability, `max_gap_ms`, `gaps` and `part_failed`. |
-| `beep` | Starts a 150 ms, 2000 Hz beep if the buzzer is available; reports unavailable during an active alarm sequence. |
+| `beep` | Starts a 150 ms, 2000 Hz beep if output is enabled and PWM is available; reports unavailable during an active alarm sequence, or `Buzzer disabled by buzzer_enabled=false` when compiled out of operation. A started beep does not establish that a physical module is connected. |
+| `battery` | Cached raw ADC average, battery millivolts, sample age and effective multiplier. |
+| `battery calibrate <meter_mV>` | Suggests a multiplier using an actual meter reading; does not apply or save it. |
+| `get adc.multiplier` | Reports the effective battery-conversion multiplier. |
+| `set adc.multiplier <value>` | Saves and applies a multiplier from 0 to 10; `0` restores the board default of 5.42. |
 | `get fall.channel` | Describes the configured destination without returning its shared key. |
 | `set fall.channel ...` | Validates and saves the destination for new incidents; syntax below. |
 
@@ -25,11 +39,59 @@ outage is latched; it does not mean the detector is armed or no fall occurred.
 A fresh-data outage of five seconds produces `motion=FAULT`. Gap counters track
 completed intervals between fresh valid samples, including an outage once data
 resumes. See the [delivery guide](message_delivery_changes.md).
+`motion=CALIBRATING` identifies the explicit maintenance pause; fresh-data health
+tracking continues during that pause. Detection resumes with normal rearm after
+success, cancellation or failure. `beep` is unavailable during calibration.
 
 USB command input is bounded per loop and the firmware does not echo characters.
 A serial terminal can still enable its own local echo or logging. Overlong lines
 and lines containing NUL are discarded rather than executed as a truncated command.
-The diagnostics above are not BLE custom variables; `fall.channel` is.
+`fall.channel` and `calibrate` are BLE custom variables. Detailed coefficient
+reports, `motion raw`, and the other diagnostics remain USB commands.
+
+## Stationary gyroscope calibration
+
+Follow the dedicated [calibration guide](gyro_calibration.md) for preparation,
+USB and MeshCore local CLI examples, expected messages, failure recovery,
+persistence and verification. The device may be horizontal, vertical or tilted,
+but must remain stationary. No accelerometer calibration is performed.
+
+`calibrate save` explicitly activates a validated result; collection alone leaves
+the previous saved correction active. Pending results expire after 120 seconds.
+Calibration is rejected during active fall/help incidents and cannot repair
+MPU6050 communication failures.
+
+## Battery diagnostics and calibration (USB)
+
+Use a stable battery voltage and measure at the battery terminals under the same
+conditions as the firmware reading. These commands work through USB serial at
+115200 baud while the BLE companion is running:
+
+1. Send `battery` to inspect `raw`, `mV`, `age_ms` and `multiplier`.
+2. Send `battery calibrate <meter_mV>` using the meter's integer millivolt value.
+   For example, a **measured** 3.920 V becomes `battery calibrate 3920`.
+3. Review the suggested `set adc.multiplier ...` command and send it to save
+   and apply that value. The suggestion itself makes no change.
+4. Send `battery` again and compare it with the meter. Check more than one
+   battery voltage, including near the 3500 mV warning and 3400 mV shutdown
+   thresholds. Reboot and use `get adc.multiplier` to check persistence.
+
+Suggestions require a cached reading no older than 2500 ms, raw counts from
+1 through 1022, and meter input from 3300 through 4200 mV. These limits are
+in [`HealthNodeConfig.h`](../include/HealthNodeConfig.h). Missing, stale,
+saturated or invalid inputs produce an error. `battery` reports the cache
+without starting a conversion; its age lets you see whether sampling continues.
+
+The saved `adc_mult` preference defaults to zero when absent in an older file;
+zero selects the board's effective multiplier of **5.42**. `set adc.multiplier 0`
+saves that default selection. A failed preference save leaves the live multiplier
+unchanged. Values must be complete decimal numbers; NaN, infinity, negative
+values and trailing text are rejected.
+
+This is a raw-count scale, not the physical 4.9 resistor-divider ratio. The
+suggestion uses `meter_mV / (raw * (3.3 / 1024) * 1000)`. A single-point adjustment
+does not establish ADC accuracy across its range. See the
+[battery conversion reference](heltec_v4_spec_reference.md#battery-conversion-in-the-firmware).
 
 ## Fall-message channel (USB and BLE)
 
@@ -63,7 +125,7 @@ filesystem/factory resetting removes the selection and restores the compiled
 default, initially public `#falldetect`.
 
 Every new fall incident captures the selected channel. Its initial alert,
-automatic warnings, assistance request, late confirmation, multipart messages and
+automatic warnings, assistance request, fall/false-alarm confirmation, multipart messages and
 retries keep that destination even if the configured channel is changed meanwhile.
 A later incident uses the new selection. Receiving nodes need the matching channel
 key and radio settings. Setting this destination does not add or overwrite entries
@@ -507,6 +569,15 @@ local command tables above for this BLE companion.
 - `value`: ADC multiplier (0.0-10.0)
 
 **Default:** `0.0` (value defined by board)
+
+For this Heltec V4 build, `0` selects the board default of **5.42** and
+`get adc.multiplier` reports the effective value. It scales raw 10-bit ADC
+counts; it is not the physical **4.9** battery-divider ratio. Replacing 5.42
+with 4.9 solely from the resistor values would lower the reported battery
+voltage by about 9.6%. See the [battery conversion reference](heltec_v4_spec_reference.md#battery-conversion-in-the-firmware)
+for units. In the local SeniorHealthNode companion, these commands are USB-only
+and save to companion preferences; follow the
+[meter calibration workflow](#battery-diagnostics-and-calibration-usb).
 
 **Note:** Returns "Error: unsupported by this board" if hardware doesn't support it
 
@@ -1130,7 +1201,8 @@ and terminate the command with carriage return. The reply contains `fall`, `help
 `motion`, `max_gap_ms`, `gaps`, and `part_failed`.
 
 `fall` and `help` report the independent initial-fall and current response-message
-part. Responses include assistance, automatic warnings and late user confirmation.
+part. Responses include assistance, automatic warnings, late fall confirmation and
+`User Confirms False Alarm` with location. See the [post-fall gesture rules](message_delivery_changes.md#post-fall-response-directives).
 `part_failed=1` retains a failure in any part of the current or last completed
 response event, even if a later part succeeds; the next event resets it.
 States distinguish queueing, local transmission, repeater echo evidence,
