@@ -108,7 +108,9 @@ requires appropriate flyback protection. GPIO47 supplies a control signal only.
 `buzzer_active_low = false` is the default: GPIO47 is LOW during silence and
 supplies 50% PWM during tones. PWM is disconnected during silent intervals.
 The DIYables module uses its onboard driver; the discrete circuit is an alternative.
-Set polarity to `true` only for an alternative driver requiring HIGH idle,
+The [module reference](buzzer_module_reference.md) identifies the passive Amazon
+variant, published specifications and physical verification procedure.
+Set polarity to `true` only when the connected driver requires HIGH idle,
 then rebuild and flash. The wrong setting can
 leave the driver energized during intended silence even if tones sound normal.
 See [trigger polarity, reset bias and incorrect-setting effects](gy521_sensor.md#buzzer-trigger-polarity).

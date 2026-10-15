@@ -12,8 +12,10 @@
 # PlatformIO: .pio/core cache, .pio/p packages, .pio/tools compilers,
 # .pio/build combined companion firmware, native/native_delivery tests, probes and logs.
 # Keep temporary gesture traces and false-alarm verification logs under .pio/.
-# Passive-buzzer PWM/polarity test executables and verification logs belong under
-# .pio/; keep test/test_alarm_buzzer/, driver source and wiring/CLI docs trackable.
+# Passive-buzzer PWM/polarity and attachment-readback regression executables,
+# merged images and verification logs belong under .pio/. Keep
+# test/test_alarm_buzzer/, driver source, docs/buzzer_module_reference.md and
+# wiring/CLI documentation trackable.
 # Calibration build/test/image checks also belong under .pio/; calibration source,
 # test/test_gyro_calibration/ and docs/gyro_calibration.md remain trackable.
 # USB CLI/statistics build output and native-test executables also belong under

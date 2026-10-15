@@ -10,6 +10,9 @@ Buzzer polarity defaults to LOW idle (`buzzer_active_low = false`); see the
 Output is optional (`buzzer_enabled`); host tests cover disabled operation as
 well as both enabled trigger polarities, PWM disconnection during silence,
 idle polling without hardware writes and inactive output after a failed pitch change.
+Regression coverage also checks that stale duty readback during pin attachment
+cannot replace the sounding duty. Product data and physical checks are in the
+[buzzer module reference](buzzer_module_reference.md).
 
 The [stationary gyroscope calibration](gyro_calibration.md) adds USB/BLE controls,
 independent validation, explicit persistence and temporary detection suspension.
