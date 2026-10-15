@@ -2,38 +2,34 @@
 
 ## Product identification and published data
 
-The hardware assumption is the **Passive, 5 pieces** selection of the
-[Amazon listing for ASIN B0DHGP95K4](https://www.amazon.com/Buzzer-Module-Arduino-ESP8266-Raspberry/dp/B0DHGP95K4?th=1),
-inspected on 2026-10-14. The listing also offers an Active selection; the
-passive selection is the basis of this configuration.
+The [DIYables manufacturer product page](https://diyables.io/products/passive-buzzer-module)
+is the primary hardware reference, inspected on 2026-10-14.
 
-| Listing field | Published information |
+| Manufacturer specification | Published information |
 | --- | --- |
-| Brand and manufacturer | DIYables |
-| Item model number | DIY-BUZZER-MODULE-PASSIVE-5 |
-| ASIN | B0DHGP95K4 |
-| Type and quantity | Passive piezoelectric buzzer module; 5 pieces |
-| Supply | 3.3–5 V; title describes a 5 V module |
-| Pitch control | Variable input frequency |
-| Listed platforms | Arduino, ESP32, ESP8266 and Raspberry Pi |
-| Package dimensions | 5.75 × 3.43 × 0.71 inches |
-| Listed item weight | 0.634 ounces |
-| Date first available | September 19, 2024 |
+| Product | DIYables passive piezo buzzer module |
+| Supported supply range | 3.3–5 V DC |
+| Control | PWM frequency determines pitch; sustained sound requires PWM |
+| Interface | Three terminals: VCC, GND and signal |
+| Mounting | Bolt holes |
+| Compatible platforms | Arduino, ESP32, ESP8266, Raspberry Pi and PWM-capable controllers |
+| Output applications | Tones, melodies, alarms and notifications |
 
-Package dimensions do not specify individual PCB dimensions. The listing's
-low-power description is qualitative; it supplies no numerical current rating.
-
-The [manufacturer product page](https://diyables.io/products/passive-buzzer-module)
-specifies 3.3–5 V DC, PWM pitch control, VCC/GND/signal connections and mounting
-holes. The [ESP32-S3 tutorial](https://newbiely.com/tutorials/esp32-s3/esp32-s3-piezo-buzzer)
-describes the onboard driver and tone/noTone operation. These sources do not
-establish a numerical sound-pressure rating or a guaranteed silent input polarity.
+The page does not specify rated current, sound-pressure level, resonant frequency,
+frequency limits, recommended duty cycle or guaranteed silent input polarity.
+Retail package dimensions and model suffixes are not module electrical ratings.
+The linked [ESP32-S3 tutorial](https://newbiely.com/tutorials/esp32-s3/esp32-s3-piezo-buzzer)
+describes the onboard transistor driver and tone/noTone playback.
 
 ## Firmware connections and operation
 
+**The project supply is 3.3 V DC from the Heltec 3V3 pin.** The manufacturer's
+wider supply range does not change this wiring requirement. Supply voltage is
+set by the physical connection; no firmware command selects or regulates it.
+
 | Module terminal | Heltec V4 connection |
 | --- | --- |
-| VCC | 3V3 |
+| VCC | 3V3 (3.3 V DC) |
 | GND | GND, shared with the Heltec |
 | I/O (signal) | GPIO47 |
 
@@ -47,6 +43,8 @@ LEDC channel 0 and 2000 Hz for ordinary beeps and SOS. A passive module requires
 a square wave for sustained sound; a constant input can produce only a click
 or no audible output. The firmware uses 50% duty during tones, disconnects PWM
 during silence and restores LOW with the default polarity setting.
+The 2000 Hz pitch and 50% duty are firmware choices, not manufacturer ratings
+or a claim of maximum loudness. GPIO47 uses the ESP32's 3.3 V logic level.
 
 Each tone attaches the pin before writing its sounding duty. In the pinned
 Arduino ESP32 2.x implementation, attachment configures the channel using

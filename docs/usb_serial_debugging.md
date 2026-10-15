@@ -266,8 +266,8 @@ sharing this signal requires a current-limiting resistor and a circuit matched
 to the configured polarity; an indicator wired for HIGH-idle operation may show
 the opposite silent/sounding behavior. See the
 [wiring and polarity guide](gy521_sensor.md#buzzer-trigger-polarity).
-The [DIYables module reference](buzzer_module_reference.md) identifies the
-Passive, 5-piece Amazon selection and documents supply, wiring and PWM behavior.
+The [DIYables module reference](buzzer_module_reference.md) documents manufacturer
+specifications, the required 3.3 V DC supply, wiring and PWM behavior.
 
 After flashing, run `beep` while no alarm or calibration is active. Confirm one
 150 ms tone followed by silence, with no repeated sound. The expected ordinary
