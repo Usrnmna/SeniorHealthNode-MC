@@ -77,8 +77,10 @@ private:
       }
       applied_frequency = frequency;
     }
-    ledcWrite(HealthNodeConfig::buzzer_pwm_channel, 128);
     ledcAttachPin(HealthNodeConfig::buzzer_pin, HealthNodeConfig::buzzer_pwm_channel);
+    // Attach configures the channel from hardware duty readback, which may still
+    // reflect the previous PWM cycle. Apply sounding duty after that configuration.
+    ledcWrite(HealthNodeConfig::buzzer_pwm_channel, 128);
     attached = true;
     return true;
   }

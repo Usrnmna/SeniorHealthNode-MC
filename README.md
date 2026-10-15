@@ -364,6 +364,7 @@ reference](docs/cli_commands.md) and [`MotionHealth.h`](examples/companion_radio
 | Guide | Contents |
 | --- | --- |
 | [Sensor and buzzer](docs/gy521_sensor.md) | Wiring, button gestures, battery reminders, detector tuning and recipient setup. |
+| [Buzzer module reference](docs/buzzer_module_reference.md) | DIYables model/ASIN, published specifications, PWM operation and bench checks. |
 | [MPU-6050 and GY-521 reference](docs/mpu6050_gy521_reference.md) | Supplied PDFs, module schematic caveats, driver registers, measurement units and scale factors. |
 | [Pin reference](docs/pin_schematic.md) | Firmware-derived GPIO connections and optional peripherals. |
 | [Heltec V4 specification](docs/heltec_v4_spec_reference.md) | V4.3.1 specifications, schematic-verified battery/FEM corrections, ADC scaling and V4.2 comparisons. |

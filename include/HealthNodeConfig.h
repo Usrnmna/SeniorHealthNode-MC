@@ -4,7 +4,8 @@
 // EDIT HERE, then rebuild heltec_v4_companion_radio_ble. No alarm state is saved to flash.
 // Channel selection can override the defaults below via USB/BLE: set fall.channel.
 namespace HealthNodeConfig {
-// DIYables passive module: VCC=3V3, GND=GND, I/O=buzzer_pin; onboard driver.
+// DIYables DIY-BUZZER-MODULE-PASSIVE-5 (ASIN B0DHGP95K4): onboard driver.
+// VCC=3V3, GND=GND, I/O=buzzer_pin; see docs/buzzer_module_reference.md.
 // https://diyables.io/products/passive-buzzer-module
 // GPIO supplies PWM only during tones; silent gaps disconnect PWM and set idle level.
 // Optional output: false skips all buzzer GPIO/PWM setup and playback.

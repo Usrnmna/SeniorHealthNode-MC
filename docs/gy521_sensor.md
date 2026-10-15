@@ -39,6 +39,11 @@ sensor data and is unavailable during active fall/help incidents.
 
 ## Passive buzzer wiring and shared functions
 
+The configured module is DIYables **DIY-BUZZER-MODULE-PASSIVE-5**, the Passive,
+5-piece selection of Amazon ASIN **B0DHGP95K4**. The
+[module reference](buzzer_module_reference.md) records the product listing's
+specifications, source limitations and output verification procedure.
+
 The buzzer is optional. With `buzzer_enabled = true` (default), its signal is
 **GPIO47**, using ESP32 LEDC channel 0 at
 **2000 Hz, 50% duty** for ordinary beeps and SOS. `buzzer_active_low = false`

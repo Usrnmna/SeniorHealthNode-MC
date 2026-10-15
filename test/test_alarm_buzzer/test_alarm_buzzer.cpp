@@ -14,6 +14,8 @@ static uint32_t output_duty = 0;
 static uint32_t output_frequency = 0;
 static int output_level = LOW;
 static bool output_attached = false;
+static bool simulate_stale_attach_readback = false;
+static uint32_t attach_readback_duty = 0;
 
 void digitalWrite(int, int level) {
   output_level = level;
@@ -30,6 +32,9 @@ void ledcWrite(uint8_t, uint32_t duty) {
   output_events.push_back({'W', duty});
 }
 void ledcAttachPin(uint8_t, uint8_t) {
+  // Arduino ESP32 2.x configures the channel using ledc_get_duty(). The hardware
+  // readback can still contain the previous PWM cycle's duty after ledcWrite().
+  if (simulate_stale_attach_readback) output_duty = attach_readback_duty;
   output_attached = true;
   output_events.push_back({'A', output_duty});
 }
@@ -49,6 +54,8 @@ protected:
     output_duty = output_frequency = 0;
     output_level = LOW;
     output_attached = false;
+    simulate_stale_attach_readback = false;
+    attach_readback_duty = 0;
     g_mock_millis = 0;
   }
   uint32_t silentDuty() const { return GetParam() ? 255 : 0; }
@@ -109,6 +116,29 @@ TEST_P(AlarmBuzzerPolarity, SosGapsAndExplicitStopAreInactive) {
   buzzer.stop();
   EXPECT_EQ(output_duty, silentDuty());
   EXPECT_FALSE(output_attached);
+}
+
+TEST_P(AlarmBuzzerPolarity, ToneStartsDespiteStaleDutyReadbackAtAttachment) {
+  simulate_stale_attach_readback = true;
+  attach_readback_duty = silentDuty();
+  AlarmBuzzer buzzer(GetParam(), true);
+  ASSERT_TRUE(buzzer.begin());
+  ASSERT_TRUE(buzzer.beep());
+  EXPECT_EQ(output_duty, 128u);
+  advance(buzzer, HealthNodeConfig::beep_ms);
+  ASSERT_TRUE(buzzer.beep());
+  EXPECT_EQ(output_duty, 128u);
+  buzzer.stop();
+  ASSERT_TRUE(buzzer.startLowBattery());
+  EXPECT_EQ(output_duty, 128u);
+  EXPECT_EQ(output_frequency, HealthNodeConfig::low_battery_tones_hz[0]);
+  advance(buzzer, HealthNodeConfig::long_beep_ms);
+  advance(buzzer, HealthNodeConfig::low_battery_gap_ms);
+  EXPECT_EQ(output_duty, 128u);
+  EXPECT_EQ(output_frequency, HealthNodeConfig::low_battery_tones_hz[1]);
+  buzzer.startSOS();
+  EXPECT_EQ(output_duty, 128u);
+  EXPECT_EQ(output_frequency, HealthNodeConfig::buzzer_frequency_hz);
 }
 
 TEST_P(AlarmBuzzerPolarity, BatteryTonesRetuneWhileInactiveAndFinishInactive) {
