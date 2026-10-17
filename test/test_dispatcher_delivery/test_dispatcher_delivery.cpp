@@ -240,7 +240,7 @@ TEST_F(DispatcherDelivery, ExpiryRemovesEveryExpiredEntryWithoutTouchingUntracke
 
 TEST_F(DispatcherDelivery, AllocationResetsStaleMetadataIncludingInboundPath) {
   // Poison every free pool slot, bypassing the normal release path to exercise
-  // defensive reset on allocation rather than just successful cleanup.
+  // defensive reset on allocation even when prior cleanup was incomplete.
   std::vector<mesh::Packet*> packets;
   for (int i = 0; i < 4; ++i) {
     auto* p = pool.allocNew();

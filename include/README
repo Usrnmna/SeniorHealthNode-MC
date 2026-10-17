@@ -13,5 +13,7 @@ The runtime command set fall.channel overrides the compiled destination for new
 incidents and saves it across reboot. Existing incidents keep their captured
 channel. Changing a compiled default does not override a saved selection.
 
-See ../README.md and ../docs/cli_commands.md for setup and command syntax;
-../docs/gy521_sensor.md and ../docs/message_delivery_changes.md explain tuning.
+See [initial setup](../docs/setup.md) and the
+[command guide](../docs/cli_commands.md) for configuration procedures.
+The [sensor guide](../docs/gy521_sensor.md) and
+[delivery guide](../docs/message_delivery_changes.md) explain tuning.

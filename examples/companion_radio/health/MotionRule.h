@@ -2,11 +2,11 @@
 #include <stdint.h>
 #include <math.h>
 
-// EDIT HERE: all tunable settings. Units: g includes gravity; dps = degrees/s.
+// Detector settings. Units: g includes gravity; dps = degrees/s.
 // Intended mounting: firmly attached to the torso/chest. Prototype only.
 struct FallDetectionConfig {
   // STUDY [4], Huynh 2015: low acceleration -> impact AND rotation in 0.5 s.
-  // https://doi.org/10.1155/2015/452078 (README bibliography uses these numbers).
+  // https://doi.org/10.1155/2015/452078; bibliography: docs/fall_detection.md.
   float low_g = 0.35f;          // Upper end of the study's 0.30-0.35 g range.
   float impact_g = 2.4f;
   float rotation_dps = 240.0f;

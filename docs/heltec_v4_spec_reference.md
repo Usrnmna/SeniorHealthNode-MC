@@ -63,7 +63,7 @@ V4.3.1. The older V4.2 table separately lists -N-HF, -N-LF and -N-433 variants.
 
 The V4.3.1 general specification gives maximum receive sensitivity of -137 dBm,
 without bandwidth or spreading-factor conditions. Its contents page mentions
-a sensitivity section, but the supplied PDF has no detailed sensitivity table.
+a sensitivity section, but the reference PDF has no detailed sensitivity table.
 For comparison only, the **older V4.2 PDF**, table 3.5.2 on page 14, lists
 typical sensitivity at 125 kHz: -137 dBm at SF12, -131 dBm at SF10 and
 -122 dBm at SF7. These detailed conditions are not restated in V4.3.1.

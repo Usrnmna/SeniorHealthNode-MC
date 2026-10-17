@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title description">
+<title id="title">Illustrated alarm sequence</title>
+<desc id="description">A possible fall starts SOS and queues an alert. Before escalation, three short PRG presses stop SOS and queue assistance text with location for the selected channel. Actual reception requires a working radio path.</desc>
+<rect width="1200" height="340" rx="20" fill="#071C31"/>
+<g font-family="Segoe UI, DejaVu Sans, sans-serif">
+<text x="32" y="39" font-size="16" font-weight="700" fill="#41D8CF">ILLUSTRATED ALARM SEQUENCE</text>
+<text x="32" y="78" font-size="25" font-weight="700" fill="#F3F7FA">Assistance requested before automatic escalation</text>
+<rect x="32" y="105" width="348" height="157" rx="18" fill="#102C43" stroke="#41D8CF" stroke-width="3"/>
+<text x="52" y="148" font-size="20" font-weight="700" fill="#41D8CF">01</text>
+<text x="52" y="187" font-size="27" font-weight="700" fill="#F3F7FA">Possible fall</text>
+<text x="52" y="225" font-size="20" font-weight="400" fill="#B4C8D6">Motion sequence detected</text>
+<text x="52" y="253" font-size="20" font-weight="400" fill="#B4C8D6">SOS + initial alert queued</text>
+<path d="M392 183h21m-6 -5 7 5-7 5" fill="none" stroke="#41D8CF" stroke-width="3"/>
+<rect x="426" y="105" width="348" height="157" rx="18" fill="#102C43" stroke="#41D8CF" stroke-width="3"/>
+<text x="446" y="148" font-size="20" font-weight="700" fill="#41D8CF">02</text>
+<text x="446" y="187" font-size="27" font-weight="700" fill="#F3F7FA">Wearer response</text>
+<text x="446" y="225" font-size="20" font-weight="400" fill="#B4C8D6">Three short PRG presses</text>
+<text x="446" y="253" font-size="20" font-weight="400" fill="#B4C8D6">SOS stops; assistance queued</text>
+<path d="M786 183h21m-6 -5 7 5-7 5" fill="none" stroke="#41D8CF" stroke-width="3"/>
+<rect x="820" y="105" width="348" height="157" rx="18" fill="#102C43" stroke="#41D8CF" stroke-width="3"/>
+<text x="840" y="148" font-size="20" font-weight="700" fill="#41D8CF">03</text>
+<text x="840" y="187" font-size="27" font-weight="700" fill="#F3F7FA">Channel message</text>
+<text x="840" y="225" font-size="20" font-weight="400" fill="#B4C8D6">Assistance text + location</text>
+<text x="840" y="253" font-size="20" font-weight="400" fill="#B4C8D6">Matching receiving radios</text>
+<text x="32" y="311" font-size="19" fill="#B4C8D6">Concept sequence only. Radio reception depends on coverage, settings and available recipients.</text>
+</g></svg>

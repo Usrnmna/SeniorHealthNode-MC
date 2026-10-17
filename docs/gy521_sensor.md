@@ -17,7 +17,7 @@ The sensor uses Wire1 at 100 kHz. OLED/RTC use Wire on GPIO17/18.
 This configuration targets the OLED board, not the TFT firmware environment.
 
 The [MPU-6050/GY-521 source reference](mpu6050_gy521_reference.md) includes the
-supplied register manual and module sheet, maps the current driver settings to
+archived register manual and module sheet, maps the current driver settings to
 their registers, and explains module power and pull-up caveats. The module
 sheet's Arduino wiring example does not replace the Heltec connections above.
 
@@ -185,7 +185,7 @@ alarm_buzzer.beep();     // Default 150 ms; returns immediately.
 loops. The API also supplies `startSOS()` and `stop()` for the fall-response owner.
 `beep()` returns false if output is disabled, PWM initialization or frequency setup
 failed, or an SOS/battery sequence is active. The
-USB serial command `beep` tests just the sound without creating a
+USB serial command `beep` tests sound output without creating a
 fall event or sending a channel acknowledgement.
 
 ## Low-battery buzzer reminder
@@ -404,11 +404,11 @@ pio device monitor --port COM_PORT --baud 115200 --eol CR
 ```
 
 Replace `COM_PORT` with the board's actual port. Create `.venv` in this project
-folder as described in the [Windows setup guide](../README.md#build-and-test-on-windows),
+folder as described in the [Windows setup guide](build-validation.md#build-and-test-on-windows),
 then replace `pio` with `.\.venv\Scripts\python.exe -m platformio`.
 The project configuration uses `.pio/core` for PlatformIO's cache and `.pio/p`
 for toolchain packages. Run `.\verify.ps1` to build the combined firmware and run all native tests.
-Configure the node's radio parameters to match your MeshCore network before use.
+Configure the node's radio parameters to match the intended MeshCore network before use.
 
 Serial startup reports detection at 0x68 or a five-second retry. Enter `motion`
 (carriage return) to see acceleration x/y/z in g, rotation x/y/z in degrees/second,
@@ -512,9 +512,9 @@ Only fresh samples count. A gap beyond 100 ms requires fresh settling; a shorter
 unobserved interval is tolerated, not proof of continuous physical stillness.
 
 **Research mapping:** stages 2-3 adapt the bounded sequence in Huynh et al. (2015),
-[README study 4](../README.md#study-4), [original paper](https://doi.org/10.1155/2015/452078).
+[research study 4](fall_detection.md#study-4), [original paper](https://doi.org/10.1155/2015/452078).
 Stage 4 and all startup/cooldown/data guards are **project-specific extensions**.
-The temporal/posture work in README study 2 provides context, but this code does
+The temporal/posture work in [research study 2](fall_detection.md#study-2) provides context, but this code does
 not reproduce its chest-and-thigh posture classifier. Voting (study 1), LSTM
 (study 3), and smartphone posture/orientation rules (study 5) are not implemented.
 

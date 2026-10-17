@@ -257,14 +257,14 @@ to compare a quiet baseline with repeated diagnostic queries. Compare sample rat
 mean/max spacing, gaps, and sensor failures over comparable intervals; isolated
 maxima require context rather than an automatic pass/fail conclusion.
 
-The latest local build completed successfully. Application and bootloader checksums
+The recorded beta build completed successfully. Application and bootloader checksums
 and validation hashes passed, and the merged image matched its component bytes at
-the expected offsets. The latest targeted host regression run passed **179 of 179
+the expected offsets. The recorded targeted host regression run passed **179 of 179
 cases**, covering buzzer behavior, fall responses, low battery, post-fall handling,
 and simulated hardware faults. This is a targeted result, not a claim that every
 test suite was rerun for this build.
 
-Compiled merged-image identification:
+Recorded beta merged-image identification:
 
 ```text
 File: firmware-merged.bin

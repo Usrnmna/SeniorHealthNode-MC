@@ -1,7 +1,8 @@
 #pragma once
 #include <stdint.h>
 
-// EDIT HERE, then rebuild heltec_v4_companion_radio_ble. No alarm state is saved to flash.
+// Compiled settings; changes require rebuilding heltec_v4_companion_radio_ble.
+// Alarm state is volatile and is not saved to flash.
 // Channel selection can override the defaults below via USB/BLE: set fall.channel.
 namespace HealthNodeConfig {
 // DIYables passive buzzer module with onboard driver; supply: 3.3 V DC.

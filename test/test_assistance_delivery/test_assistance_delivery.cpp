@@ -490,7 +490,7 @@ TEST_F(AssistanceChannel, EchoOnlyConfirmsItsOwnMessageOwner) {
 }
 
 // Group decryption includes zero padding to the cipher block boundary. Compare
-// all non-padding bytes, just as a receiving chat client reads the text field.
+// all non-padding bytes, matching a receiving chat client's text-field parsing.
 static std::string decodedText(const std::vector<uint8_t>& bytes) {
   EXPECT_GE(bytes.size(), 5u);
   if (bytes.size() < 5) return "";
