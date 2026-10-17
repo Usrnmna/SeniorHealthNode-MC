@@ -1,19 +1,19 @@
 # MPU-6050 and GY-521 source reference
 
-## Supplied documents
+## Archived reference documents
 
-Unmodified copies of the supplied PDFs are preserved in this repository:
+Unmodified copies of the reference PDFs are preserved in this repository:
 
 | Source | Identity and scope |
 | --- | --- |
 | [MPU-6000.PDF](references/mpu6050/MPU-6000.PDF) | InvenSense, *MPU-6000 and MPU-6050 Register Map and Descriptions*, RM-MPU-6000A-00, revision 4.2, 2013-08-19, 46 pages. Despite the filename, it covers both chips. |
-| [GY-521.pdf](references/mpu6050/GY-521.pdf) | *MPU 6050 GY-521 3 Axis Gyro Accelerometer Sensor Module Arduino*, 2 pages. No publisher, revision or release date is identified in the supplied sheet. Includes features, an Arduino Uno wiring illustration and a module schematic. |
+| [GY-521.pdf](references/mpu6050/GY-521.pdf) | *MPU 6050 GY-521 3 Axis Gyro Accelerometer Sensor Module Arduino*, 2 pages. No publisher, revision or release date is identified in the archived sheet. Includes features, an Arduino Uno wiring illustration and a module schematic. |
 
 Page references below use the PDFs' one-based page order. These are hardware
 documents, not recorded motion samples, a training dataset, or fall-detection
 validation data. The register manual refers to a separate product specification
 for electrical limits and self-test acceptance criteria; that specification is
-not supplied here.
+not included here.
 
 ## Sensor and module distinction
 

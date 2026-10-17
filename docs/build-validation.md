@@ -19,9 +19,29 @@ independent validation, explicit persistence and temporary detection suspension.
 Host tests exercise its state machine, record recovery and sensor corrections.
 These tests do not establish actual-board bias accuracy or client interoperability.
 
+## Build and test on Windows
+
+The repository root contains `platformio.ini`, `src`, `test`, and
+`variants`. No source files from a parent or sibling `SeniorHealthNode` folder are
+required. PlatformIO keeps its core cache in `.pio/core`, toolchain packages in
+the shorter `.pio/p` path, and build output in `.pio/build`.
+
+From the repository root, create the local build environment:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install platformio==6.2.0
+```
+
+The native tests require a C++17-capable GCC compiler. The old PlatformIO MinGW
+5.1 compiler cannot build GoogleTest 1.17. A standalone Windows compiler is
+available from [WinLibs](https://winlibs.com/). Put its `bin` directory on `PATH`,
+pass it through the `verify.ps1 -CompilerBin` parameter, or extract it into
+`.pio/tools` so the compiler is `.pio/tools/mingw64/bin/g++.exe`.
+
 ## Reproducible verification
 
-Follow the [Windows setup](../README.md#build-and-test-on-windows) for PlatformIO
+Follow the [Windows setup](#build-and-test-on-windows) for PlatformIO
 and a C++17-capable GCC compiler, then run:
 
 ```powershell
@@ -58,8 +78,26 @@ are under `boards/variants/heltec_v4`. Outputs under
 | `firmware-merged.bin` | Combined flash image produced by `mergebin`. |
 | `firmware.elf` | Linked firmware and symbols for inspection/debugging. |
 
-Use the [documented PlatformIO upload command](../README.md#getting-started) for
+Use the [PlatformIO upload procedure](#uploading-the-combined-firmware) for
 installation. A successful build or merge does not verify an installed device.
+
+## Uploading the combined firmware
+
+After completing [assembly and setup](setup.md), build and upload from the project
+root, replacing `COM_PORT` with the board's USB serial port:
+
+```powershell
+pio run -e heltec_v4_companion_radio_ble
+pio run -e heltec_v4_companion_radio_ble -t upload --upload-port COM_PORT
+```
+
+With the project virtual environment, replace `pio` with
+`.\.venv\Scripts\python.exe -m platformio`. One upload installs BLE companion and
+health monitoring together. PlatformIO selects the application layout for upload.
+For a separate flash tool, `firmware-merged.bin` contains the combined layout at
+`0x0`; `firmware.bin` is the application at `0x10000` and requires matching bootloader
+and partition files. A full flash erase removes identity, preferences, saved
+channel selection and calibration. See the [post-flash checks](usb_cli_reference.md#post-flash-usb-cli-verification).
 
 ## What each check covers
 

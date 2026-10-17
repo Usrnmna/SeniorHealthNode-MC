@@ -9,7 +9,7 @@ Numbers below are **ESP32 GPIO numbers**, not connector positions or IC package
 pin numbers. Arrows show signal direction; `<-->` is bidirectional.
 Onboard connections are already wired on the Heltec PCB.
 The [manufacturer specification reference](heltec_v4_spec_reference.md) records
-the supplied V4.3.1 datasheet, which specifies GPIO36 HIGH for Vext and agrees
+the V4.3.1 datasheet, which specifies GPIO36 HIGH for Vext and agrees
 with this firmware. The separate official V4.3 schematic resolves the datasheet's
 battery-equation and FEM-label errors; the reference records the corrections.
 
@@ -98,7 +98,7 @@ GND -------------------------+                buzzer (+) -- rated supply
 ```
 
 Use module header labels for the GY-521, not bare MPU6050 package pads.
-See the [supplied MPU-6050/GY-521 reference](mpu6050_gy521_reference.md) for the
+See the [archived MPU-6050/GY-521 reference](mpu6050_gy521_reference.md) for the
 module regulator, onboard pull-ups, AD0 behavior and driver register settings.
 All external grounds join Heltec GND; I2C pull-ups must go to 3.3 V.
 The existing buzzer guide suggests 1 kohm base and 47 kohm pull-down resistors
@@ -243,7 +243,7 @@ Charging-status sensing remains disabled (`charging_status_pin = -1`).
 No additional charging-status wire is specified here.
 
 This is a firmware-derived connection guide, not a complete PCB netlist of every
-power, USB, memory or protection IC. The supplied V4.3.1 datasheet contains no
+power, USB, memory or protection IC. The referenced V4.3.1 datasheet contains no
 embedded schematic; Heltec publishes a separate V4.3 schematic. Its battery
 divider and FEM nets have been checked against this guide; see the
 [specification reference](heltec_v4_spec_reference.md). This guide remains a

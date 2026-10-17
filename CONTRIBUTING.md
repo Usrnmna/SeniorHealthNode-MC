@@ -24,15 +24,23 @@ functions and obvious sections. Keep tunable values easy to find; explain
 non-obvious inputs, side effects, timing assumptions and failure behavior.
 Avoid complexity that makes manual inspection or adjustment harder.
 
-Use impersonal academic language in documentation and code comments. Avoid
-first-person narration and personal attributions to an owner, developer or
-assistant. State technical behavior, assumptions and evidence directly. Document
-only work performed and evidence verified. Describe current capabilities rather than keeping dated
-change summaries or old passing-test totals in usage guides.
+Use impersonal academic language in documentation and code comments. State
+requirements, configuration, behavior, assumptions and evidence directly, without
+personal narration or discussion history. Preserve original upstream MeshCore
+documentation; apply editorial revisions to project-specific material. Document
+only work performed and evidence verified. Describe current capabilities rather
+than keeping dated change summaries or old passing-test totals in usage guides.
+
+Keep the main README focused on the intended audience, project capabilities,
+alarm experience, setup entry points and limitations. Place implementation detail,
+research, wiring schedules and verification procedures in linked topic guides.
+Use text connection or process diagrams when they clarify relationships more
+directly than prose. Preserve relevant settings, source citations and evidence
+boundaries when moving material between documents.
 
 ## Verification
 
-Follow the [Windows setup](README.md#build-and-test-on-windows), then run
+Follow the [Windows setup](docs/build-validation.md#build-and-test-on-windows), then run
 `.\verify.ps1` for firmware changes. It builds the combined image and merged
 binary and runs both `native` and `native_delivery`. Add focused tests for changed
 observable behavior; [fault testing](docs/virtual-fault-testing.md) lists examples.
