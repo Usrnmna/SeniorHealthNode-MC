@@ -90,7 +90,15 @@ struct AdvertPath {
 #include "health/FallResponse.h"
 #include "health/LowBatteryAlert.h"
 #include "health/MotionHealth.h"
+#include "health/DetectorAvailability.h"
 #include "health/MotionStatistics.h"
+#include "health/MotionTrace.h"
+#include "health/MotionRecorder.h"
+#include "health/MotionCaptureFormat.h"
+#include "health/MotionServiceTiming.h"
+#include "health/BoundedUsbOutput.h"
+#include "health/FallInitialAlert.h"
+#include "health/FallIncidentStore.h"
 #include <helpers/GyroCalibration.h>
 #include "health/AssistanceDelivery.h"
 #include "health/FallNoticeOutbox.h"
@@ -103,6 +111,13 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
 {
 #if ENV_INCLUDE_MPU6050
   MotionRule motion_rule;
+  FallInitialAlert initial_alert;
+  FallIncidentStore::Incident durable_incident;
+  FallIncidentStore::Outcome recovery_outcome = FallIncidentStore::Missing;
+  uint32_t persistence_retry_at = 0;
+  bool persistence_dirty = false, persistence_fault = false, persistence_attempted = false;
+  void pollIncidentPersistence(uint32_t now);
+  void recordIncident(bool active);
   FallResponse fall_response;
   FallChannel fall_channel;
   LowBatteryAlert battery_alert;
@@ -111,6 +126,33 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
   MotionHealth motion_health{FallDetectionConfig{}.max_sample_gap_ms, HealthNodeConfig::motion_fault_timeout_ms};
   MotionStatistics motion_statistics;
   MotionStatistics motion_stats_reply;
+  MotionTrace motion_trace;
+  MotionTrace::Sample trace_reply[MotionTrace::capacity];
+  MotionTrace::Event event_reply[MotionTrace::event_capacity];
+  unsigned trace_reply_count = 0, trace_reply_row = 0;
+  bool trace_reply_events = false;
+  uint32_t motion_generation = 0;
+  DetectorAvailability detector_availability;
+  MotionServiceTiming motion_timing;
+  MotionRecorder motion_recorder;
+  uint8_t capture_buffer[MotionRecorder::max_payload] = {};
+  uint64_t capture_boot = 0;
+  uint32_t capture_session = 0, capture_sample_sequence = 0, capture_calibration_id = 0;
+  uint32_t capture_generation = 0, capture_discarded = 0, capture_overflows = 0, capture_discontinuities = 0;
+  uint8_t capture_calibration_state = 255, capture_invalid_reason = 255;
+  bool motion_seen = false, capture_buzzer = false, capture_invalid = false;
+  DetectorAvailability::Cause availabilityCause(uint32_t now) const;
+  bool handleRecordingCommand(const char* command);
+  void serviceMotionRecording();
+  void captureInvalidation(uint32_t at, uint32_t processed, uint8_t mask = 3);
+  void captureSample(uint32_t sampled, uint32_t processed, bool maintenance, bool fired, uint16_t quality);
+  void captureResponse(uint8_t kind, uint32_t now, bool pressed = false, bool result = false);
+  void captureCalibration(bool force = false);
+  void captureBuzzer(bool force = false);
+  void captureAcquisition(bool force = false);
+  const char* motionAvailability(uint32_t now) const;
+  void observeDetectorAvailability(uint32_t now);
+  void continueMotionTraceReply();
   int8_t motion_stats_row = -1;
   bool motion_stats_raw = false;
   void continueMotionStatsReply();
@@ -136,6 +178,7 @@ public:
   void pollMotion();
   void pollFallResponse();
   void pollLowBattery();
+  void restoreFallIncident();
   bool fallAlarmActive() const { return fall_response.alarmActive(); }
 #endif
 public:

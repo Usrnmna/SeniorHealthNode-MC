@@ -4,6 +4,7 @@
 // Nonblocking post-fall gestures, measured at observed edges after debounce.
 // A fast double click waits for the full window; a third click takes priority.
 class FallButtonGesture {
+  friend struct MotionCaptureCheckpoint;
 public:
   enum Result { None, ConfirmFall, FalseAlarm };
   FallButtonGesture(uint32_t window_ms, uint32_t double_ms, uint32_t long_ms, uint32_t debounce_ms)

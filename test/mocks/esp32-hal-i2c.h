@@ -4,7 +4,7 @@ constexpr int ESP_OK = 0, ESP_FAIL = 1;
 inline int i2cWrite(uint8_t, uint16_t, const uint8_t* data, size_t count, uint32_t timeout_ms) {
   Wire1.last_timeout_ms = timeout_ms;
   Wire1.writes.emplace_back(data, data + count);
-  if (Wire1.status == 0 && count == 2) Wire1.registers[data[0]] = data[1];
+  if (Wire1.status == 0 && count == 2) Wire1.writeRegister(data[0], data[1]);
   return Wire1.status == 0 ? ESP_OK : ESP_FAIL;
 }
 inline int i2cWriteReadNonStop(uint8_t, uint16_t, const uint8_t* data, size_t count,

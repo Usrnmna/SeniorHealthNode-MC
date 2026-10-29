@@ -77,6 +77,19 @@ TEST(GyroCalibration, SensorErrorStaleDataAndLargeGapsAbortImmediately) {
   cal.tick(6101, true); EXPECT_FALSE(cal.active()); EXPECT_STREQ("sample-gap", cal.reason());
   cal.start(7000); cal.observe(7101, stationary); EXPECT_STREQ("sample-gap", cal.reason());
 }
+TEST(GyroCalibration, BoundedBacklogDefersFreshnessButNeverOverallTimeout) {
+  GyroCalibration cal;ASSERT_TRUE(cal.start(1000));cal.observe(1020,stationary);
+  cal.tick(1140,true,true);ASSERT_TRUE(cal.active());
+  for(uint32_t at=1040;at<=1120;at+=20)cal.observe(at,stationary);
+  cal.tick(1140,true,false);EXPECT_TRUE(cal.active());
+  cal.tick(1140+HealthNodeConfig::gyro_calibration_timeout_ms,true,true);
+  EXPECT_FALSE(cal.active());EXPECT_STREQ("timeout",cal.reason());
+}
+TEST(GyroCalibration, BufferedSampleBeforeStartCannotEnterTheNewCollection) {
+  GyroCalibration cal;ASSERT_TRUE(cal.start(1000));auto moving=stationary;moving.gz=400;
+  cal.observe(980,moving);EXPECT_TRUE(cal.active());EXPECT_EQ(0u,cal.restarts());
+  feed(cal,1000,20100);EXPECT_TRUE(cal.pending());
+}
 TEST(GyroCalibration, CachedSamplesDoNotAccumulateAndLowSamplingRateFails) {
   GyroCalibration cal; cal.start(0);
   for (uint32_t now = 0; now <= 100; ++now) cal.tick(now, true);
@@ -188,17 +201,19 @@ TEST(GyroSensor, CorrectionPreservesGravityRawReadingsAndFreshness) {
   Wire1 = TwoWire{};
   Wire1.response = [](uint8_t reg, uint8_t count) {
     if (reg == 0x75) return std::vector<uint8_t>{0x68};
+    if (reg == 0x3A) return std::vector<uint8_t>{1};
+    if (reg == 0x72) return std::vector<uint8_t>{0, 14};
     if (count == 1) return std::vector<uint8_t>{Wire1.registers[reg]};
     std::vector<uint8_t> bytes(count, 0);
-    if (reg == 0x3A && count == 15) { bytes[0] = 1; bytes[5] = 0x10; bytes[10] = 131; }
+    if (reg == 0x74 && count == 14) { bytes[4] = 0x10; bytes[9] = 131; }
     return bytes;
   };
-  MPU6050Sensor sensor; sensor.poll(0); ASSERT_TRUE(sensor.poll(100));
+  MPU6050Sensor sensor; sensor.poll(0); sensor.poll(100); ASSERT_TRUE(sensor.poll(120));
   auto value = calibrated(); value.bias[0] = 2;
   ASSERT_TRUE(sensor.setCalibration(value));
   EXPECT_FLOAT_EQ(2, sensor.raw_values.gx); EXPECT_FLOAT_EQ(0, sensor.values.gx);
-  EXPECT_FLOAT_EQ(1, sensor.values.az); EXPECT_EQ(10u, sensor.sampleAgeMs(110));
-  EXPECT_FALSE(sensor.poll(110)); ASSERT_TRUE(sensor.poll(120));
+  EXPECT_FLOAT_EQ(1, sensor.values.az); EXPECT_EQ(30u, sensor.sampleAgeMs(130));
+  EXPECT_FALSE(sensor.poll(130)); ASSERT_TRUE(sensor.poll(140));
   EXPECT_FLOAT_EQ(0, sensor.values.gx); EXPECT_FLOAT_EQ(2, sensor.raw_values.gx);
   ASSERT_TRUE(sensor.setCalibration(value)); EXPECT_FLOAT_EQ(0, sensor.values.gx);
   ASSERT_TRUE(sensor.setCalibration(GyroCalibration::Result{})); EXPECT_FLOAT_EQ(2, sensor.values.gx);

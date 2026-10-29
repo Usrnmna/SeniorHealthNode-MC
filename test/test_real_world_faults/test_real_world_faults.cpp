@@ -23,8 +23,9 @@ struct FaultRig {
   LowBatteryAlert battery;
   uint32_t now;
   unsigned falls = 0;
+  uint32_t generation = 0;
   float acceleration = 1, rotation = 0;
-  int read_length = 15;
+  int read_length = 14;
   uint8_t identity = 0x68;
   bool pressed = false;
 
@@ -32,14 +33,15 @@ struct FaultRig {
     Wire1 = TwoWire{};
     Wire1.response = [this](uint8_t reg, uint8_t count) {
       if (reg == 0x75) return std::vector<uint8_t>{identity};
+      if (reg == 0x3A) return std::vector<uint8_t>{1};
+      if (reg == 0x72) return std::vector<uint8_t>{0, 14};
       if (count == 1) return std::vector<uint8_t>{Wire1.registers[reg]};
-      std::vector<uint8_t> bytes(15, 0);
-      bytes[0] = 1; // DATA_RDY_INT; each rig tick represents a new sensor update.
+      std::vector<uint8_t> bytes(14, 0); // One fresh FIFO record per simulated tick.
       auto word = [&](unsigned offset, int16_t value) {
         bytes[offset] = uint16_t(value) >> 8; bytes[offset + 1] = uint8_t(value);
       };
-      word(5, int16_t(acceleration * 4096));
-      word(9, int16_t(rotation * 65.5f));
+      word(4, int16_t(acceleration * 4096));
+      word(8, int16_t(rotation * 65.5f));
       bytes.resize(read_length);
       return bytes;
     };
@@ -48,8 +50,10 @@ struct FaultRig {
   void tick(uint32_t step = 20) {
     now += step;
     const bool fresh = sensor.poll(now);
-    if (!sensor.valid) motion.update(now, 0, 0, false);
-    else if (fresh && motion.update(now, sensor.values.acceleration(), sensor.values.rotation(), true)) {
+    if (generation != sensor.discontinuityGeneration() || !sensor.valid) {
+      generation = sensor.discontinuityGeneration(); motion.update(now, 0, 0, false);
+    }
+    if (fresh && motion.update(sensor.sampleTimeMs(), sensor.values.acceleration(), sensor.values.rotation(), true)) {
       ++falls;
       if (response.onFall(now, pressed)) buzzer.startSOS(now);
     }
@@ -81,15 +85,15 @@ struct FaultRig {
 };
 
 class ShortMpuRead : public ::testing::TestWithParam<int> {};
-TEST_P(ShortMpuRead, CancelsConfirmationThenRecoversForANewFall) {
-  FaultRig r; r.quiet(120); r.sample(.3f); r.sample(3, 300); r.quiet(20);
+TEST_P(ShortMpuRead, CancelsIncompleteEvidenceThenRecoversForANewFall) {
+  FaultRig r; r.quiet(120); r.sample(.3f); r.sample(3, 100);
   r.read_length = GetParam(); r.tick();
   EXPECT_FALSE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
-  r.read_length = 15; r.quiet(160);
+  r.read_length = 14; r.quiet(160);
   EXPECT_EQ(r.falls, 0u); EXPECT_FALSE(r.response.alarmActive());
   r.fall(); EXPECT_EQ(r.falls, 1u); EXPECT_TRUE(r.buzzer.alarmActive());
 }
-INSTANTIATE_TEST_SUITE_P(AllTruncatedLengths, ShortMpuRead, ::testing::Range(0, 15));
+INSTANTIATE_TEST_SUITE_P(AllTruncatedLengths, ShortMpuRead, ::testing::Range(0, 14));
 
 class LoopStall : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(LoopStall, CannotJoinFallEvidenceAcrossMissingTime) {
@@ -103,14 +107,14 @@ class FaultStage : public ::testing::TestWithParam<int> {};
 TEST_P(FaultStage, DisconnectNeverCompletesAnOldCandidate) {
   FaultRig r; r.quiet(120);
   if (GetParam() >= 1) r.sample(.3f);
-  if (GetParam() >= 2) { r.sample(3, 300); r.quiet(20); }
+  if (GetParam() >= 2) r.sample(3, 100); // Incomplete strong sequence.
   r.read_length = 0; r.identity = 0;
   r.quiet(400); EXPECT_FALSE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
-  r.read_length = 15; r.identity = 0x68;
+  r.read_length = 14; r.identity = 0x68;
   r.quiet(400); EXPECT_TRUE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
   r.fall(); EXPECT_EQ(r.falls, 1u);
 }
-INSTANTIATE_TEST_SUITE_P(ArmedPeaksConfirming, FaultStage, ::testing::Values(0, 1, 2));
+INSTANTIATE_TEST_SUITE_P(ArmedLowImpact, FaultStage, ::testing::Values(0, 1, 2));
 
 TEST(RealWorldFaults, WrongDeviceIdentityNeverProducesMotionEvidence) {
   FaultRig r; r.identity = 0x69;
@@ -128,20 +132,20 @@ TEST(RealWorldFaults, ConfigurationWriteFailureRecoversAfterBackoff) {
 TEST(RealWorldFaults, AlternatingReadFailuresNeverAccumulateQuietEvidence) {
   FaultRig r;
   for (unsigned i = 0; i < 3000; ++i) {
-    r.read_length = (i % 2) ? 15 : 0; r.sample(i % 7 == 0 ? .3f : 1);
+    r.read_length = (i % 2) ? 14 : 0; r.sample(i % 7 == 0 ? .3f : 1);
   }
   EXPECT_EQ(r.falls, 0u);
-  r.read_length = 15; r.quiet(400); r.fall(); EXPECT_EQ(r.falls, 1u);
+  r.read_length = 14; r.quiet(400); r.fall(); EXPECT_EQ(r.falls, 1u);
 }
 
-TEST(RealWorldFaults, DisconnectDuringSosPreservesAlarmAndCooldown) {
+TEST(RealWorldFaults, DisconnectDuringSosPreservesAlarmAndAllowsLaterDetection) {
   FaultRig r; r.quiet(120); r.fall(); ASSERT_EQ(r.falls, 1u);
   r.read_length = 0; r.identity = 0; r.quiet(300);
   EXPECT_TRUE(r.response.alarmActive()); EXPECT_TRUE(r.buzzer.alarmActive());
-  r.read_length = 15; r.identity = 0x68; r.quiet(400); r.fall();
-  EXPECT_EQ(r.falls, 1u); // Reconnection must not bypass the 60-second cooldown.
+  r.read_length = 14; r.identity = 0x68; r.quiet(400); r.fall();
+  EXPECT_EQ(r.falls, 2u); // A later event is observed while the original SOS remains active.
   r.quiet(3100); r.fall();
-  EXPECT_EQ(r.falls, 2u); EXPECT_TRUE(r.buzzer.alarmActive());
+  EXPECT_EQ(r.falls, 3u); EXPECT_TRUE(r.buzzer.alarmActive());
 }
 
 TEST(RealWorldFaults, BouncingClicksSilenceSosDespiteDisconnectedSensor) {
@@ -252,7 +256,7 @@ TEST(RealWorldFaults, JitteredHourOfOrdinaryMotionThenFallRemainsResponsive) {
     const uint32_t step = 20 + random % 31; elapsed += step;
     // Reproducible bounded ordinary movement, not a recorded human dataset.
     r.sample(.75f + (random % 50) / 100.f, float(random % 25), step);
-    if (random % 97 == 0) { r.read_length = 0; r.tick(); r.read_length = 15; }
+    if (random % 97 == 0) { r.read_length = 0; r.tick(); r.read_length = 14; }
     if (random % 211 == 0) r.tick(250);
   }
   EXPECT_EQ(r.falls, 0u); EXPECT_FALSE(r.buzzer.alarmActive());
@@ -323,7 +327,7 @@ TEST(RealWorldFaults, Utf8OversizePayloadLeavesDestinationAndGuardsUntouched) {
 
 class HalReadFault : public ::testing::TestWithParam<int> {};
 TEST_P(HalReadFault, BusErrorInvalidatesEvenACompleteBufferedResponse) {
-  FaultRig r; r.quiet(120); r.sample(.3f); r.sample(3, 300);
+  FaultRig r; r.quiet(120); r.sample(.3f); r.sample(3, 100);
   Wire1.read_status = GetParam(); r.tick();
   EXPECT_FALSE(r.sensor.valid); EXPECT_EQ(r.falls, 0u);
   EXPECT_EQ(Wire1.last_timeout_ms, HealthNodeConfig::sensor_i2c_timeout_ms);
@@ -343,7 +347,7 @@ TEST(RealWorldFaults, OversizedSensorResponseIsRejectedWithoutReusingOldValues) 
   FaultRig r; r.quiet(120); r.sample(.3f);
   r.read_length = 16; r.sample(3, 300);
   EXPECT_FALSE(r.sensor.valid);
-  r.read_length = 15; r.quiet(160); EXPECT_EQ(r.falls, 0u);
+  r.read_length = 14; r.quiet(160); EXPECT_EQ(r.falls, 0u);
   r.fall(); EXPECT_EQ(r.falls, 1u);
 }
 

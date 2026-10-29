@@ -41,7 +41,7 @@ monitoring and BLE companion functionality on the same Heltec node.
 | SDA | GPIO4, Wire1 | Host I2C data |
 | SCL | GPIO6, Wire1 | Host I2C clock |
 | AD0 | GND | Select 7-bit address 0x68 |
-| INT | Unconnected | Driver polls data-ready status over I2C; no host interrupt input |
+| INT | Unconnected | Driver reads FIFO count/status over I2C; no host interrupt input |
 | XDA, XCL | Unconnected | Auxiliary I2C pins; not the host SDA/SCL pair |
 
 GY-521 page 1 advertises a **3-5 V module input** and an onboard LDO. Page 2
@@ -84,10 +84,16 @@ Register addresses and write values below are hexadecimal unless marked decimal.
 | GYRO_CONFIG, 0x1B | Write 0x08 | FS_SEL=1, +/-500 degrees/s | 14, 31 |
 | ACCEL_CONFIG, 0x1C | Write 0x10 | AFS_SEL=2, +/-8 g | 15, 29 |
 | INT_PIN_CFG, 0x37 | Write 0x00 | INT_RD_CLEAR=0: clear status only by reading INT_STATUS | 26 |
-| INT_ENABLE, 0x38 | Write 0x01 | Enable DATA_RDY_EN; INT remains unconnected | 27 |
-| INT_STATUS through GYRO_ZOUT_L, 0x3A-0x48 | Read 15 bytes in one burst | Data-ready status, acceleration, temperature, then angular rate | 28-31 |
+| INT_ENABLE, 0x38 | Write 0x11 | Enable data-ready and FIFO-overflow status; INT remains unconnected | 27 |
+| FIFO_EN, 0x23 | Write 0xF8 | Queue acceleration, temperature and all gyro axes | 16-17 |
+| USER_CTRL, 0x6A | Disable/reset FIFO, then write 0x40 | Begin FIFO capture after sensor settling | 38-39 |
+| INT_STATUS, 0x3A | Read before/after a FIFO burst | Detect overflow before accepting a batch | 28 |
+| FIFO_COUNT_H/L, 0x72-0x73 | Read the count | Determine complete 14-byte records and detect excessive backlog | 43 |
+| FIFO_R_W, 0x74 | Read up to 28 bytes | Consume at most two complete records in FIFO order | 44 |
 
-Initialization writes and reads back all eight configuration registers above.
+Initialization writes and reads back the configuration registers above,
+including FIFO source and control settings. Status, count and data registers are
+read-only observations for this driver.
 A mismatch in the relevant writable bits or a failed read prevents readiness
 and triggers the five-second initialization retry. Reserved bits are ignored.
 
@@ -97,13 +103,13 @@ not the 50 Hz register-output rate or a guarantee of host sampling timing.
 
 ## Measurement format and scale factors
 
-After the status byte, the 14 measurement bytes hold seven signed,
+Each 14-byte FIFO record holds seven signed,
 two's-complement, 16-bit values, high byte
-first: acceleration X/Y/Z, temperature, then gyro X/Y/Z. Pages 29-31 explain
-that a burst supplies measurements from the same sampling instant. This avoids
-mixing axes across independently timed byte reads. The driver accepts a complete
-burst only when DATA_RDY_INT is set. Identical axis values can still be a fresh
-sample; the status bit, rather than numerical change, determines freshness.
+first: acceleration X/Y/Z, temperature, then gyro X/Y/Z. FIFO ordering follows
+the enabled sensor sources (pages 16-17 and 44); pages 29-31 describe the
+corresponding sensor register formats. Complete FIFO records determine freshness,
+not numerical changes or rereading the latest register cache. A partial trailing
+record is not consumed. Identical stationary samples can still be fresh.
 
 | Accelerometer range | AFS_SEL | Counts per g |
 | --- | --- | --- |
@@ -132,18 +138,32 @@ signature and reassessing detector assumptions.
 
 ## Timing, unused capabilities and validation boundary
 
-The current driver allows at least 100 ms after successful initialization before
-reading samples. It nominally polls every 20 ms, invalidates a failed/short read,
-retries after 20 ms, attempts reinitialization after three consecutive read
-failures, and waits five seconds after failed initialization. A clear data-ready
-bit produces no detector update. After one second without new data, such reads
-invalidate the cache and count toward the same three-failure recovery path.
-The configured
-ESP32 I2C timeout is 5 ms per transaction. These are implementation settings,
-not timing guarantees inferred from the PDFs.
+The driver waits at least 100 ms after successful configuration with FIFO
+capture disabled, then resets/enables FIFO. It collects nominal 20 ms samples
+in two-record bursts and the companion processes at most four per motion poll.
+INT remains unconnected. Chronological acquisition timestamps are estimated from
+the FIFO count and 20 ms period. The completed count-read time includes I2C work;
+the newest sample is dated one period before that observation. The nominal phase
+uncertainty is 20 ms, with additional count-read and clock uncertainty. Capture
+and processing times are distinct.
 
-The manual describes FIFO, data-ready interrupts, self-test and auxiliary-bus
-features. This driver does not implement FIFO capture, interrupt-driven sampling,
-factory self-test, DMP-based motion fusion or an external magnetometer. Data-ready
-status indicates an update but does not count updates missed while the cooperative
-loop was delayed. See the [timing guide](fall_timing_changes.md).
+Overflow, failed/partial reads, contradictory timestamps and backlogs beyond
+one second explicitly invalidate continuity. Discard diagnostics are lower bounds
+where unreadable/overflowed data prevents exact accounting. Three consecutive
+read failures trigger reinitialization; failed initialization waits five seconds.
+No FIFO output for one second enters the same recovery path. The ESP32 I2C timeout
+is 5 ms per transaction, not a whole-loop deadline. See
+[acquisition and recovery](fall_detection.md#acquisition-and-sample-timing).
+
+The manual also describes host interrupt acquisition, self-test, DMP and
+auxiliary-bus features. Host interrupt timestamps, factory self-test, DMP motion
+fusion and an external magnetometer remain unimplemented. The selected filter's
+42/44 Hz bandwidth exceeds the 25 Hz Nyquist frequency of the configured output;
+it does not by itself establish adequate rejection of vibration or narrow-impact
+aliasing. Sampling/filter changes require recorded and physical comparison rather
+than assumed accuracy gains. Near-register-limit samples are flagged as saturated.
+
+Physical FIFO behavior, oscillator timing, phase error, bus contention, mounting,
+buzzer coupling and simultaneous BLE/RF load remain bench-validation needs.
+Software tests exercise the register/FIFO contract using fake devices; they do
+not establish actual sensor timing or detection performance.

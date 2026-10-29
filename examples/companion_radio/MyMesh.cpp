@@ -1846,6 +1846,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     char channel_description[80];
     fall_channel.describe(channel_description, sizeof(channel_description));
     append("fall.channel", channel_description);
+    // Compact availability is visible to the existing BLE custom-variable client.
+    append("motion.state", motionAvailability(millis()));
     char calibration_status[100];
     gyro_calibration.describe(millis(), calibration_status, sizeof(calibration_status));
     append("calibrate", calibration_status);
@@ -1871,7 +1873,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       if (strcmp(sp, "calibrate") == 0) {
         char reply[160];
         const auto result = controlCalibration(np, reply);
-        Serial.printf("Calibration command: %s\n", reply);
+        usb_reply.append("Calibration command: %s\n", reply);
         if (result == 0) writeOKFrame();
         else writeErrFrame(result == 2 ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_ILLEGAL_ARG);
         return;
@@ -2097,9 +2099,17 @@ void MyMesh::replySettingsResult(NodePrefs& candidate) {
 }
 
 void MyMesh::checkCLIRescueCmd(bool health_only) {
-  if (usb_reply.pending()) { usb_reply.drain(Serial); return; }
 #if ENV_INCLUDE_MPU6050
-  if (motion_stats_row >= 0) { continueMotionStatsReply(); return; }
+  // Reply/control traffic has priority over recording. RX keeps progressing even
+  // when TX stalls, so a stop command cannot be trapped behind its start reply.
+  usb_reply.drain(bounded_usb_output);
+  serviceMotionRecording();
+  if (!usb_reply.pending()) {
+    if (motion_stats_row >= 0) continueMotionStatsReply();
+    else if (trace_reply_row < trace_reply_count) continueMotionTraceReply();
+  }
+#else
+  if (usb_reply.pending()) { usb_reply.drain(Serial); return; }
 #endif
   int len = strlen(cli_command);
   unsigned serial_bytes = 0;
@@ -2133,7 +2143,7 @@ void MyMesh::checkCLIRescueCmd(bool health_only) {
 
     char reply[160] = {};
 #if ENV_INCLUDE_MPU6050
-    if (handleDiagnosticCommand(cli_command)) {
+    if (handleRecordingCommand(cli_command) || handleDiagnosticCommand(cli_command)) {
       // Diagnostic replies drain incrementally on subsequent loop iterations.
     } else
 #endif

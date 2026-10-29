@@ -97,21 +97,34 @@ health monitoring together. PlatformIO selects the application layout for upload
 For a separate flash tool, `firmware-merged.bin` contains the combined layout at
 `0x0`; `firmware.bin` is the application at `0x10000` and requires matching bootloader
 and partition files. A full flash erase removes identity, preferences, saved
-channel selection and calibration. See the [post-flash checks](usb_cli_reference.md#post-flash-usb-cli-verification).
+channel selection, calibration and unresolved-incident metadata. See the [post-flash checks](usb_cli_reference.md#post-flash-usb-cli-verification).
 
 ## What each check covers
 
 | Check | Scope |
 | --- | --- |
 | Firmware build and merge | Compiles and links the combined companion/health image and packages its flash components. |
-| `native` | Detector, response, double/triple gesture arbitration, residual quiet, multipart outbox, button ownership, buzzer GPIO/LEDC requests for both polarities, battery conversion/calibration and preferences, MPU freshness/readback and sensor/timing faults, channel parsing/storage and dispatcher behavior with host fakes. |
+| `native` | Strong/context detector paths, history/recovery/refractory behavior, FIFO phase/jitter/overflow and loss, bounded traces/evidence, late quiet, checked incident storage/recovery, double/triple gestures, multipart outbox, button ownership, buzzer GPIO/LEDC requests, battery/calibration/preferences, channel storage and dispatcher behavior with host fakes. |
 | `native_delivery` | Production packet builder, Mesh/Dispatcher, encryption/decryption and packet pool with a fake radio and clock; public/private channel matching, false-alarm text/location, and incident-scoped retry/cancellation behavior. |
 | Documentation checks | Relative file links, Markdown structure, documented settings and source/command consistency. |
+| Capture/replay checks | Versioned checkpoint/operation codecs, strict mixed-USB parsing, exact working-tree identity, actual health-method capture fixtures and repeated production detector/response replay. |
 
 Use the actual command output for pass/fail results and case counts for the
 checkout being tested. Stored logs, binary sizes and results from earlier source
 revisions are not evidence that a later checkout passes. See
 [virtual fault testing](virtual-fault-testing.md) for focused commands and scenarios.
+
+The recording pipeline has an additional host check:
+
+```powershell
+.\.venv\Scripts\python.exe tools\test_health_replay.py -v
+```
+
+Setting `HEALTH_CAPTURE_FIXTURE` to an output path during `native` exports the
+actual health-integration fixture. Replay that file using
+`tools/health_replay.py <path> --repeat 2` after the run. Regenerate it after
+changing source because the embedded content identity must match. See
+[capture and replay usage](motion_recording.md).
 
 ## Physical validation boundary
 
@@ -123,6 +136,11 @@ accuracy. The simulated one-hour trace is not a hardware soak test.
 Physical PRG validation must include two complete presses within one second,
 waiting through the three-second decision window, and third-press priority under
 BLE/radio load. Host edge timestamps do not establish physical polling latency.
+
+Experimental detector context thresholds and sampling/filter settings require
+labelled recordings and held-out wearer/activity evaluation. Software recovery
+tests cannot establish reliable power-off age: the current target uses bounded
+clock-uncertain recovery, and flash writes/power interruptions need bench tests.
 
 The residual-quiet settings (10 seconds, 0.08 g thresholds and 5 degrees/s) require
 worn-device and buzzer-vibration evaluation. Queueing, local transmission and a

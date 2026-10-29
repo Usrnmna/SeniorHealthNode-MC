@@ -61,11 +61,11 @@ uint32_t SerialBLEInterface::onPassKeyRequest() {
 }
 
 void SerialBLEInterface::onPassKeyNotify(uint32_t pass_key) {
-  BLE_DEBUG_PRINTLN("onPassKeyNotify(%u)", pass_key);
+  BLE_DEBUG_PRINTLN("onPassKeyNotify (PIN omitted)");
 }
 
 bool SerialBLEInterface::onConfirmPIN(uint32_t pass_key) {
-  BLE_DEBUG_PRINTLN("onConfirmPIN(%u)", pass_key);
+  BLE_DEBUG_PRINTLN("onConfirmPIN (PIN omitted)");
   return true;
 }
 

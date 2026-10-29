@@ -151,10 +151,10 @@ successful changes. The upstream remote-node reference in
 
 | Command | Output |
 | --- | --- |
-| `health` | Existing concise status, including since-startup `max_gap_ms` and `gaps`. |
-| `health detail` | Uptime, sensor initialization/validity, current sample age or `n/a`, motion fault, detector phase, cooldown, calibration and alarm/delivery states. |
-| `health timing` | Fresh sample count, interval count, covered duration, latest/minimum/maximum/mean spacing in milliseconds, observed sample rate, gaps and rejected nonfinite samples. |
-| `health errors` | Bus failures, short reads, polls without data-ready, data-ready timeout attempts, initialization attempts/failures, reinitializations, successful recoveries, configuration and identity mismatches. |
+| `health` | Initial/response delivery state, separate `sensor` and `detector` availability, sample age and startup gap count. |
+| `health detail` | Sensor validity/fault, sample age, detector availability/phase and refractory state, unavailable duration, calibration, alarm/delivery state, restart outcome, pending/failed persistence, coalesced initial alerts and omitted confirmations under delivery saturation. |
+| `health timing` | Accepted sample count, estimated capture intervals/coverage/rate, gaps and nonfinite rejections; FIFO sample/backlog/pending counts, discarded-record lower bound and nominal timestamp phase estimate. |
+| `health errors` | Bus/short-read and empty-FIFO/timeout counters, initialization/recovery/configuration faults, FIFO overflows/resets, timestamp adjustments/discontinuities and saturation; gyro calibration temperature delta and absence of accelerometer calibration. |
 | `health radio` | Current radio settings, outbound queue size, radio busy state, packet/airtime counters, last packet RSSI/SNR when available, noise-floor estimate, flood/direct counters. Local radio counters do not establish recipient delivery. |
 | `health stats reset` | Reset motion/timing aggregates and sensor diagnostic counters. Preserve detector state, faults, alarms, calibration, radio counters and since-startup gap counters. |
 | `motion` | Existing latest corrected sample: acceleration axes, gyro axes, chip temperature. |
@@ -162,6 +162,10 @@ successful changes. The upstream remote-node reference in
 | `motion stats` | Corrected axis and magnitude statistics plus chip temperature. |
 | `motion stats raw` | Uncorrected gyro axis/magnitude statistics; acceleration and temperature are shared with corrected statistics. |
 | `motion stats reset` | Reset motion/timing aggregates only. Sensor error counters, detector state, faults, alarms and calibration remain unchanged. |
+| `motion trace` | Snapshot bounded raw/corrected sample evidence around the latest decision, including accepted/rejected candidates. New decisions replace old captures; otherwise recent samples are returned. |
+| `motion events` | Snapshot up to 32 decision, transition and fault summaries with time, state, reason, magnitude and quality. |
+| `motion evidence` | Up to five raw/corrected checkpoints from the last accepted/rejected candidate: start, acceleration minimum, acceleration maximum, gyro maximum and an available pre-trigger reference sample. |
+| `motion record start` / `stop` / `status` | Optional versioned USB session recording, disabled at startup. Fixed RAM buffering, explicit recording/export loss and production replay; see [motion recording](motion_recording.md). |
 
 Each motion statistics response identifies its sample count, reset reason,
 first/last sample times and covered duration. Each row reports minimum, maximum,
@@ -177,11 +181,13 @@ updated. A sensor outage leaves previous aggregates available, identified as
 historical by `valid_now=0`; it cannot produce a reassuring zero-motion sample.
 
 Covered duration is the sum of intervals between accepted samples, including
-outages. Observed rate is `(N−1) × 1000 / coverage_ms`, not an instantaneous sensor
-rate. Resettable timing values cover the current statistics interval. The
-original `health` fields `max_gap_ms` and `gaps` continue to cover startup onward
-and are not cleared by either statistics reset command. No-data-ready polls can
-occur before the next conversion and are not themselves bus failures; timeout
+outages. With FIFO, intervals use estimated acquisition times rather than the
+loop processing time. Observed rate is `(N−1) × 1000 / coverage_ms`, not a directly
+measured sensor oscillator rate or percentage of all physical movement captured. Resettable timing values cover the current statistics interval. The
+`startup_max_gap_ms` and `startup_gaps` fields in detailed output cover
+main-loop observations of fresh data since startup; they are not cleared by either
+statistics reset command. They differ from FIFO capture-time intervals. Empty-FIFO
+polls can occur before the next conversion and are not themselves bus failures; timeout
 and reinitialization counters identify persistent problems. A recovery is the
 first fresh sample after a failure, not merely a successful identity read.
 An incomplete HAL read that also returns a bus error increments both counters;
@@ -193,19 +199,97 @@ combine different active correction coefficients. Sensor error counters remain.
 Reboot clears all RAM statistics. Single-precision online arithmetic is
 approximate; regular explicit resets define comparable measurement intervals.
 
+### Availability and trace interpretation
+
+`sensor=valid` reports a valid cache; `sensor=FAULT` indicates a prolonged
+five-second lack of fresh data. `detector`/`availability` distinguishes
+`startup`, `sensor-unavailable`, `stale`, `calibrating`, `recovering`, `armed`, `candidate`,
+`refractory` and `config-fault`. Fresh-data recovery takes at least 200 ms and
+six samples; it does not require quiet. `refractory` is the 1200 ms event
+suppression interval, not the former 60-second classifier cooldown.
+`unavailable_ms` includes a stalled loop's time after its last sample expires;
+buffer replay does not retroactively restore wall-time availability.
+State transitions are accounted at bounded batch observations; this is not an
+independent hardware uptime measurement.
+`monitoring_ms` starts at the first motion poll. Cause totals are exclusive and
+sum to that monitored interval. The precedence and stale-expiry accounting are
+specified in [recording and availability measurements](motion_recording.md#availability-and-service-measurements).
+`health timing` also reports poll duration, service gaps, sample processing delay
+and synchronous persistence time at millisecond resolution. These service counters
+and availability totals survive statistics-reset commands and reset only on reboot.
+`experimental_context_paths` reports the actual compiled detector configuration.
+`nominal_timestamp_phase_ms` is the nominal FIFO timing model, not a measured
+upper bound on count-read latency or clock drift.
+
+Trace time is estimated acquisition `millis()` for samples and observation time
+for fault-only events; timestamps wrap. Scaled raw rows contain acceleration
+X/Y/Z, gyro X/Y/Z and chip temperature. `gyro` contains the corrected gyro axes;
+acceleration is unchanged and retains gravity. Numeric states are 0 recovering,
+1 armed, 2 candidate, 3 refractory and 4 configuration fault. Named reasons
+identify starts, expiration, loss and the selected evidence path. Fault-only
+rows do not represent measured zero acceleration or rotation.
+`low-episode-renewed` records a fresh strong-sequence window without rejecting
+the existing context or resetting its checkpoints. Strong evidence keeps its own
+bounded lifetime, including across an earlier context candidate's expiration.
+
+| Quality bit | Meaning |
+| --- | --- |
+| `0x001` | FIFO acquisition time is estimated. |
+| `0x002` / `0x004` | At least one accelerometer / gyro axis is near its signed register limit. |
+| `0x008` | Count-time ambiguity required a bounded forward timestamp correction; FIFO order is preserved and no timestamp exceeds the completed count read. |
+| `0x100` | Acquisition discontinuity; earlier associated evidence is invalid. |
+| `0x200` | Calibration maintenance pause. |
+| `0x400` | Buffered sample: commanded buzzer state at processing may differ from capture time. |
+
+`motion trace` holds at most 96 samples, including up to 16 following a decision.
+`motion evidence` preserves early candidate peaks/troughs even when a long event
+outlasts that ring. Checkpoint rows are in the role order listed above, not time
+order; the gyro maximum can precede the trigger by up to 300 ms. The reference
+checkpoint is the exact qualified reference selected by the classifier when it
+is present in the recorder. An unrelated earlier sample is never substituted.
+Loss freezes rejection evidence
+without creating a fictitious sensor sample.
+Checkpoint association stops at sensor/calibration interruptions. Startup faults
+without candidates leave the rolling trace active; later unrelated faults do not
+replace an existing accepted/rejected capture. `timestamp_adjustments` in
+`health errors` counts corrected FIFO snapshots rather than individual samples.
+
+The buzzer field reports commanded sound, not measured vibration or verified
+acoustic output. Sound does not blank samples. `motion trace`, `motion evidence` and `motion events`
+retain bounded RAM evidence and lose it on reboot. Capture overwrite is expected;
+export a relevant response before a later event replaces it. Trace output has no
+full-rate streaming or automatic file logging. The separate opt-in
+[session recorder](motion_recording.md) preserves full float precision for host replay.
+
+`health detail` recovery values include `none`, `resolved`, `resumed`,
+`resumed-clock-uncertain`, `expired`, `recovery-limit` and `storage-uncertain`.
+The current target uses clock-uncertain restart recovery; clock-qualified age
+expiry is a tested storage capability, not enabled target behavior. Inspect
+`persistence_pending`, `persistence_fault`, `initial_pending` and
+`coalesced_initials` alongside recovery. `dropped_confirmations` counts newer
+explicit response transmissions omitted when earlier pending responses occupy
+all available ownership, including early assistance requests. Local acknowledgement still stops
+SOS in that case; the counter does not imply transmission or reception. See the
+[recovery policy](fall_detection.md#post-fall-assessment-and-restart-recovery).
+
 ## Sampling overhead and verification
 
-Collection uses fixed-size running moments and counters, without heap allocation,
-historical sample storage or per-sample output. A shared reciprocal is calculated
+Statistics use fixed-size running moments and counters without heap allocation
+or per-sample output. Separate fixed-size RAM traces retain sample history and
+bounded event summaries. A shared reciprocal is calculated
 once per sample for axis updates. Standard-deviation square roots and text
 formatting occur only for an explicit query. A command captures one consistent
-statistics snapshot, then formats at most one motion-statistics row per companion
-loop. USB output drains at most 32 bytes per loop and never writes more than the
-reported immediate transmit capacity. Backpressure pauses replies rather than
-waiting for the host. USB input also retains its existing 16-byte-per-loop budget.
+statistics/trace snapshot, then formats at most one reply row per companion
+loop. Each CLI service call offers at most 32 reply bytes and one optional
+31-byte recording frame to the fixed USB worker queue. Queue admission does not
+wait for the USB driver. Backpressure pauses replies rather than waiting for the
+host. USB input retains its existing 16-byte-per-call budget. BLE debug callbacks
+have a separate bounded text budget; these limits are not aggregate throughput
+guarantees. See [motion recording](motion_recording.md) for queue and worker limits.
 
-No logging, streaming or trailing-window commands are added. Statistics are
-aggregates since startup, explicit reset or calibration application.
+Statistics remain aggregates since startup, explicit reset or calibration
+application; traces are separate bounded snapshots. Neither writes samples to
+flash or transmits a continuous stream.
 
 Native tests exercise parsing, UTF-8 bounds, candidate isolation, failed saves,
 sample moments, invalid/fresh data handling, rollover, serial backpressure and
@@ -246,7 +330,7 @@ name and the radio tuple before testing setters.
 
 After several seconds stationary, `health detail` should show `initialized=1`,
 `valid=1`, `fault=0` and `calibration_active=0`. The detector should reach
-`detector=armed` after its quiet rearm period, provided no cooldown remains.
+`detector=armed` after fresh-data recovery, provided no refractory interval remains.
 Resolve sensor faults before comparing timing. A valid sensor cache alone does
 not establish that the detector is armed or receiving fresh samples.
 
@@ -335,17 +419,16 @@ permitted sample gap is 100 ms. `health timing` reports these as `nominal_ms` an
 
 | Result | Expected interpretation |
 | --- | --- |
-| `interval_ms mean` near 20 ms | Average fresh-sample spacing is close to the nominal interval. A repeatable increase during queries indicates additional delay requiring investigation. |
+| `interval_ms mean` near 20 ms | Estimated FIFO acquisition spacing matches the nominal rate. This alone does not establish low processing latency; inspect backlog, sample age and unavailable time. |
 | `observed_hz` near 50 Hz | Fresh-sample throughput is close to nominal. A sustained decrease under queries is more significant than minor differences between manual runs. |
 | Resettable `gaps=0` | No completed interval between accepted samples exceeded 100 ms during the measurement. A gap above this threshold interrupts partial detector evidence and requires rearming. |
-| Interval `max` without substantial query-related spikes | Large delays are not appearing specifically during query load. A good mean alone cannot exclude occasional disruptive gaps. |
+| Interval `max`, pending/backlog counts, sample age and unavailable time without query-related increases | Examine both estimated capture continuity and processing delay. FIFO can retain regular sample spacing while main-loop latency increases. |
 | No new bus errors, data timeouts or reinitializations | No corresponding sensor-failure evidence accumulated after reset. Failures present in both runs must be investigated before attributing them to statistics. |
-| `valid=1`, `fault=0`, detector armed when stationary outside cooldown/calibration | Sensor data and detector state remain available under the tested conditions. These fields do not establish detection accuracy. |
-| `no_data_ready` increases without timeouts or other failures | Polls can precede a new conversion; this counter alone does not establish a bus fault. Interpret it alongside sample rate, gaps and timeout counters. |
+| `valid=1`, `fault=0`, detector armed outside recovery/refractory/calibration | Sensor data and detector state remain available under the tested conditions. These fields do not establish detection accuracy. |
+| `no_data_ready` increases without timeouts or other failures | The FIFO may contain no complete record yet; this counter alone does not establish a bus fault. Interpret it alongside sample rate, gaps and timeout counters. |
 
-The original `health` fields `max_gap_ms` and `gaps`, also labelled
-`startup_max_gap_ms` and `startup_gaps` in detailed output, are since-startup
-values. Neither statistics-reset command clears them. Use the resettable
+`startup_max_gap_ms` and `startup_gaps` in detailed output are since-startup
+main-loop fresh-data observations; `health` includes the startup gap count. Neither statistics-reset command clears them. Use the resettable
 `interval_ms max` and `gaps` in `health timing` to compare the two measurement
 intervals; retain the startup values as broader context.
 
@@ -357,7 +440,8 @@ does not imply that every interval stayed below 100 ms.
 
 No fixed percentage change is established as an acceptance threshold. Repeated
 query-associated increases in interval maxima, gap counts, errors or sustained
-mean spacing warrant investigation. Preserve the baseline and loaded responses
+mean spacing, FIFO discard/overflow, backlog or unavailable duration warrant
+investigation. Preserve the baseline and loaded responses
 with the BLE/radio conditions and approximate run durations for comparison.
 
 ### Verification limits and additional bench checks
@@ -369,7 +453,9 @@ That requires a separate instrumented or disabled-collection comparison.
 
 A controlled bench motion sequence can additionally compare detector behavior
 with and without repeated queries. Begin each trial with the detector armed and
-account for the 60-second post-event cooldown and normal quiet rearm period.
+account for the 1200 ms event refractory period and fresh-data recovery after
+any fault or calibration pause. Repeated observations while one incident remains
+unresolved coalesce without restarting its deadline.
 Such trials may activate SOS and transmit actual test alerts on the configured
 fall channel. Matching responses in a few trials do not establish fall-detection
 accuracy or medical performance.

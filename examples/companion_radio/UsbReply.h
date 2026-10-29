@@ -13,6 +13,12 @@ public:
   bool pending() const { return offset < length; }
   void clear() { length = offset = 0; bytes[0] = 0; }
   void append(const char* format, ...) {
+    // Input parsing and health messages continue during a partial drain. Reuse
+    // the consumed prefix before appending instead of reporting false overflow.
+    if (offset) {
+      length -= offset; memmove(bytes, bytes + offset, length);
+      offset = 0; bytes[length] = 0;
+    }
     va_list args; va_start(args, format);
     const int written = vsnprintf(bytes + length, sizeof(bytes) - length, format, args);
     va_end(args);

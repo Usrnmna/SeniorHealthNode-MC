@@ -1,72 +1,324 @@
 # Possible-fall detection and research
 
-The staged detector runs locally in `heltec_v4_companion_radio_ble`. A PC is needed for building, flashing and setup; motion decisions run on the Heltec.
+Fall detection and MeshCore BLE companion services run together in the single
+`heltec_v4_companion_radio_ble` firmware on the same node. Decisions run locally;
+a phone connection is not required. The detector reports **possible falls**.
+A candidate, an automatic observation, and a button-confirmed wearer response
+are distinct kinds of evidence.
+
+This is the maintained reference for detector behavior, acquisition, diagnostics,
+and recovery. [Alarm operation](operation.md) describes wearer responses and
+[the sensor guide](gy521_sensor.md) covers assembly. Thresholds are engineering
+settings for firm torso/chest attachment. No measured sensitivity, specificity,
+false-alert rate or clinical performance is established for this firmware.
+
+[Motion recording and production replay](motion_recording.md) describes optional
+session capture, source/configuration identity, acquisition versus export loss,
+wall-time availability causes and the limits of deterministic host replay.
 
 ## Detector flow
 
 ```text
-Settling -- continuous quiet and cooldown complete --> Armed
-   ^                                                    |
-   |                                             low acceleration
-   |                                                    |
-   |                                                    v
-   |                                  Peaks: impact AND rotation in window
-   |                                                    |
-   |                                                    v
-   +--- emit one event <--- Confirming: continuous quiet before deadline
+Fresh contiguous data --> Armed --> Candidate --> Possible fall --> Short refractory
+       ^                   ^           |                               |
+       |                   +-- expiry -+-------------------------------+
+       |
+Invalid data / FIFO loss / excessive sample gap
+(clear associated evidence; never interpret missing data as quiet)
+
+Possible fall --> incident + SOS + bounded notification delivery
+                     |
+        original 30 s deadline + continued motion assessment + PRG response
 ```
 
-Invalid samples, excessive sample gaps and expired candidates return the rule
-to settling. Cooldown applies after an emitted event; it can overlap quiet rearming. Setting `confirm_quiet_ms = 0` bypasses only
-post-sequence confirmation. The [tuning guide](gy521_sensor.md#review-and-tune-the-algorithm)
-provides configuration constraints and tradeoffs.
+[`MotionRule.h`](../examples/companion_radio/health/MotionRule.h) uses fixed-size
+history and no allocation, waits or I/O. Startup, sensor recovery and calibration
+exit require **200 ms and at least six fresh contiguous samples**; movement does
+not prevent recovery. Invalid/nonfinite readings or a sample gap above **100 ms**
+break event association. Duplicate timestamps do not add evidence. Timer
+comparisons use unsigned elapsed milliseconds, including timer rollover.
+Expired pre-trigger rotation and reference-history entries are retired during
+sample processing so they cannot become recent again after a full timer cycle.
+
+Ordinary candidate expiration permits new evidence without another quiet interval.
+A new low-g episode following a rise above the low-g threshold opens its own
+500 ms strong-sequence window. A previously matched low-g/impact pair can still
+complete with rotation through its original deadline; a rebound cannot erase
+that evidence or extend its lifetime. Context references, features and confirmation
+deadlines retain their own original bounds across renewed low-g episodes.
+Continuous low-g does not extend a window. An emitted event has a **1200 ms refractory period**
+to avoid treating one impact train as several falls. There is no 60-second
+classifier cooldown. Notification coalescing is separate from classification.
 
 ## Algorithm stages and default settings
 
-The `STAGE 0` through `STAGE 5` comments in [`MotionRule.h`](../examples/companion_radio/health/MotionRule.h) identify each part of the implementation. Internally, the rule moves through `Settling`, `Armed`, `Peaks`, and `Confirming` states.
+Acceleration is the three-axis magnitude in **g, including gravity**. Rotation is
+the magnitude of the bias-corrected gyroscope vector in **degrees/second**.
+Relative orientation compares gravity-like acceleration directions before and
+after a transition; it is not a body-posture or injury classifier.
 
-| Code stage | Behavior | Configuration defaults |
+| Evidence path | Required evidence | Decision |
 | --- | --- | --- |
-| 0: validate samples | Reject invalid, negative, or nonfinite magnitudes; discard partial evidence across a long sample gap. Ignore duplicate timestamps. | `max_sample_gap_ms = 100` |
-| 1: settle and arm | Require continuous quiet at startup, after interrupted or expired evidence, and before rearming after an alert. | `rearm_quiet_ms = 2000` |
-| 2: start an event | Acceleration at or below the low threshold opens a fixed window. Repeated low readings cannot extend it. | `low_g = 0.35`, `event_window_ms = 500` |
-| 3: collect both peaks | Require acceleration at or above the impact threshold **and** rotation at or above its threshold within the event window. Peaks may occur on different samples and in either order. | `impact_g = 2.4`, `rotation_dps = 240` |
-| 4: confirm quiet | Require one continuous quiet interval, completed before the deadline measured from when both peaks have been observed. Movement restarts the quiet timer, not the deadline. | `confirm_quiet_ms = 1000`, `confirm_timeout_ms = 5000` |
-| 5: emit and suppress repeats | Emit one possible-fall event, then require cooldown and quiet before rearming. These periods can overlap. | `cooldown_ms = 60000` |
+| `strong-sequence` | Low acceleration at or below 0.35 g; impact at or above 2.4 g after that low reading within 500 ms; rotation at or above 240 degrees/s in the same sequence or up to 300 ms before the low reading | Immediate possible fall when the sequence is complete. Continuing movement cannot veto it. |
+| `impact-orientation` — experimental | Impact at or above 2.4 g; relative orientation change of at least 55 degrees | Requires 1000 ms of subsequent qualifying quiet. No low-g or rapid-rotation requirement. |
+| `supported-descent` — experimental | Relative change of at least 55 degrees; acceleration trough at or below 0.85 g; peak at or above 1.6 g; rotation peak at or above 80 degrees/s | Requires 1000 ms of subsequent qualifying quiet. |
+| `slow-descent` — experimental | Relative change of at least 65 degrees; trough at or below 0.85 g; peak at or above 1.15 g | Requires 2000 ms of subsequent qualifying quiet. No rapid-rotation or free-fall requirement. |
 
-Quiet means acceleration between `quiet_min_g = 0.7` and `quiet_max_g = 1.3`, inclusive, with rotation below `quiet_max_dps = 30`. Acceleration is the three-axis vector magnitude in **g, including gravity**; rotation is the three-axis angular-velocity magnitude in **degrees/second**. A sample gap exactly equal to 100 ms is tolerated; a longer gap resets evidence. Timing uses unsigned elapsed milliseconds to handle timer rollover.
+The original sequence remains available without an orientation reference. The
+additional paths are enabled by `context_paths = true` and require acceleration
+vectors; magnitude-only callers cannot establish orientation. Context candidates
+start on low acceleration, an impact of at least 1.6 g, or unloading to at most
+0.85 g while rotating at least 10 degrees/s. Therefore orientation change or lying
+still alone does not trigger an alarm. A completely smooth descent that provides
+none of these triggers can still be missed.
 
-Stages 2-3 adapt the timed sequence from Huynh et al. [4](#study-4). Quiet confirmation, startup settling, data guards, and cooldown are **project-specific extensions**. This is an adaptation for evaluation, not a reproduction of the paper's validated experimental setup or its reported performance. Quiet magnitudes do not establish lying posture or injury. Soft/sliding falls without the required low acceleration, impact, or rotation will be missed; quiet confirmation can also miss falls followed by continued movement. A dropped device can resemble a fall.
+A bounded 64-entry history supplies a gravity-like reference from **200–1000 ms
+before candidate start**. Reference samples have magnitude 0.85–1.15 g and rotation
+below 30 degrees/s. The relevant peak/trough/rotation features must be no more
+than 2000 ms old when orientation support is first established. Context is
+associated for at most 6000 ms; supporting evidence has a 5000 ms confirmation
+deadline. Every quiet-confirmation sample must still supply a usable, sufficiently
+changed orientation. Returning toward the prior orientation breaks confirmation. Old peaks cannot be associated indefinitely.
+
+Quiet for the experimental paths means magnitude 0.7–1.3 g, inclusive, and
+rotation below 30 degrees/s. It is supporting evidence for these weaker paths,
+not a requirement for the strong sequence. This detector quiet definition is
+separate from the stricter post-fall assessment below.
 
 ## Runtime behavior
 
-- [`MPU6050.h`](../src/helpers/sensors/MPU6050.h) configures filtered 50 Hz sampling with ranges of +/-8 g and +/-500 degrees/second, then verifies the configuration by readback. Each burst contains data-ready status and measurements; only a fresh sample reaches the detector. Failed/partial reads invalidate the sample and retry after 20 ms; three consecutive failures trigger reinitialization. One second without new data enters the same recovery path. Failed initialization uses five-second backoff. Polling is cooperative, so other firmware work can delay it; host interrupt and FIFO capture are not used.
-- [`MyMesh::pollMotion()` in HealthMonitor.cpp](../examples/companion_radio/HealthMonitor.cpp) passes fresh vector magnitudes to `MotionRule::update()` independently of pending alarms or delivery. Notifications coalesce while an earlier alert is pending. The detector's 60-second cooldown and quiet-rearm requirements remain in force.
-- The combined firmware collects environmental readings in a background task and serves telemetry from a bounded-age cache. OLED frames transfer in small pieces; battery readings use staged ADC acquisition and a shared cache. Configuration, methods, files, and validation limits are listed in [the timing implementation report](fall_timing_changes.md).
-- [`MotionRule.h`](../examples/companion_radio/health/MotionRule.h) holds the configuration and decision logic without Arduino dependencies, dynamic allocation, or blocking waits. `peakAcceleration()` and `peakRotation()` preserve event-window peaks for the alert, rather than reporting the later quiet readings.
-- The initial channel alert uses `Possible fall: peak accel=%.2fg rotation=%.1fdeg/s`. The independent delivery controller retains it through local failures, then waits for repeater evidence. `health` reports both message states and motion outages/gaps. The [delivery implementation guide](message_delivery_changes.md) maps directives to code and adjustment points.
+### Acquisition and sample timing
 
-Chip temperature remains available in telemetry and the `motion` command; it is not body temperature. Gyroscope telemetry clips individual axes to the Cayenne encoding range of -327.68 to 327.67 degrees/second, while the detector, serial readings, and alert text retain the full measured range.
+[`MPU6050.h`](../src/helpers/sensors/MPU6050.h) verifies identity and configuration,
+then collects all acceleration/gyro axes and temperature through the MPU6050
+hardware FIFO. Output remains **50 Hz**, **±8 g**, **±500 degrees/s**, with
+`DLPF_CFG=3`. The 100 ms hardware settling period runs with FIFO capture disabled;
+FIFO reset/enable follows settling so startup readings are not reused.
+
+FIFO records are 14 bytes. A bus burst reads at most **two records (28 bytes)**;
+[`HealthMonitor.cpp`](../examples/companion_radio/HealthMonitor.cpp) processes at
+most **four samples per motion poll**, before and after mesh work. The INT pin
+remains disconnected. Capture is buffered; host processing remains cooperative
+and bounded. Environmental collection, staged battery sampling and incremental
+OLED transfers continue in the same firmware.
+
+Samples are processed chronologically. The FIFO provides no sample timestamps,
+so times are estimated from its count and the 20 ms period. The count observation
+includes elapsed I2C work instead of using poll-entry time. The newest record is
+dated one period before that observation, with **20 ms nominal phase uncertainty**
+under the assumed sensor rate, plus count-read latency and clock uncertainty. These are estimated acquisition
+times, not measured interrupt timestamps. They avoid assigning a loop's same
+processing time to an entire burst, but cannot guarantee sub-period event timing.
+When count-read timing produces an overlap smaller than one sample period,
+FIFO order permits a forward correction of at most 20 ms. Corrected timestamps
+remain chronological and no later than the completed count read. Adjustments
+are counted and flagged; larger overlaps and gaps still invalidate continuity.
+
+FIFO overflow, partial/failed reads, contradictory timing and a backlog beyond
+1000 ms explicitly break continuity and discard buffered evidence. A partial
+trailing record is left for completion. The code does not substitute a latest
+register reading to hide lost history. Discard counts are **lower bounds** when
+the exact lost count cannot be read. Failed reads retry after 20 ms; three
+consecutive failures trigger reinitialization. No FIFO output for one second
+enters recovery, and failed initialization backs off for five seconds.
+
+The 5 ms I2C limit applies per transaction, not to the whole main loop. FIFO does
+not remove sensor bandwidth, sampling-phase, storage-stall or overload limits.
+Saturated acceleration/gyro axes are flagged; a clipped peak is not an accurate
+measurement of the true peak. See [register evidence and filter limits](mpu6050_gy521_reference.md).
+
+### Availability and event evidence
+
+Sensor health and detector availability are reported separately. `health` includes
+`sensor` and `detector`; `health detail` identifies calibration, stale data,
+recovery, armed/candidate state, refractory suppression and configuration faults.
+A healthy sensor does not imply an armed detector. Unavailable duration accounts
+for a stalled loop after its last sample's freshness expires; replaying buffered
+samples does not retrospectively remove that wall-time interval. A prolonged five-second
+sensor fault is distinct from the detector's 100 ms gap guard.
+
+[`MotionTrace.h`](../examples/companion_radio/health/MotionTrace.h) retains bounded
+RAM samples and an event ring. `motion trace` retrieves a capture of up to 96
+samples around the latest accepted/rejected decision, including up to 16 trailing
+samples; `motion events` retrieves up to 32 decision/transition summaries.
+`motion evidence` retains up to five candidate checkpoints (start, acceleration
+minimum/maximum, gyro maximum including pre-trigger rotation, and an earlier
+classifier-selected reference sample) so a multi-second event does not lose its initial features
+when the recent ring wraps. Data loss freezes a rejected candidate without
+inventing a zero-motion reading. Rows include estimated time, scaled raw
+axes, corrected gyro axes, chip temperature, state, reason, quality flags and the
+commanded buzzer state where applicable. New decisions overwrite older captures;
+these commands do not provide a permanent incident archive.
+Pre-trigger checkpoints never cross a sensor or calibration interruption.
+Startup faults without a candidate leave ordinary samples rolling; later faults
+without a new candidate preserve the previous accepted/rejected capture.
+
+`health timing` reports sample counts, interval coverage, pending/backlog samples,
+discarded-record lower bounds and timestamp uncertainty. `health errors` adds FIFO
+loss/reset, timing-discontinuity, saturation and calibration-temperature diagnostics.
+`health detail` includes unavailable time, persistence status and coalesced initial
+notifications and omitted confirmations under delivery saturation. USB replies
+take a consistent snapshot and drain incrementally,
+without per-sample printing. Exact command fields and flag meanings are in the
+[USB reference](usb_cli_reference.md#health-and-motion-inspection).
+
+### Detection and notification ownership
+
+Each accepted detector event remains a possible fall. The initial text names its
+evidence path and preserves event peaks. Additional detections while an incident
+is unresolved retain its original response deadline, button progress and alarm.
+They do not restart an initial alert's retry budget, including after that initial
+alert has completed. After acknowledgement or false-alarm dismissal, a new event
+can open a new local alarm after the short refractory interval.
+
+The initial-alert controller owns one active immutable message and one waiting
+latest incident. If new incidents outpace delivery, the waiting slot retains the
+newest and increments a coalesced counter. Response messages have their separate
+bounded outbox. Early assistance requests, later fall confirmations and false-alarm
+responses share the reserved explicit-response capacity and precedence over
+automatic warnings. If all confirmation capacity remains occupied while a newer
+incident is resolved, local acknowledgement still stops SOS; the earlier
+confirmation retains ownership and the newer transmission can be omitted.
+`health detail` reports `dropped_confirmations` for this delivery-saturation gap.
+False-alarm dismissal cancels pending initial alerts and automatic
+warnings belonging to that incident; already transmitted text cannot be recalled.
+BLE, mesh and the existing delivery controllers retain their roles. Queueing,
+local TX and repeater evidence do not establish recipient reception.
+
+## Post-fall assessment and restart recovery
+
+The first automatic assessment stays at **30 seconds after declaration**. Fresh
+motion must establish quiet over the final **10 continuous seconds** to select
+the no-residual-movement warning. Otherwise it reports an unconfirmed condition.
+After that general warning is accepted by the outbox, subsequent fresh quiet can
+produce **one** no-residual-movement update while the alarm remains unresolved.
+There is no repeated upgrade loop, automatic injury diagnosis or deadline reset.
+
+The post-fall settings in [`HealthNodeConfig.h`](../include/HealthNodeConfig.h)
+use a 0.08 g vector-change limit, 0.08 g magnitude deviation from 1 g, rotation
+below 5 degrees/s and a maximum sample gap of 100 ms. Missing data invalidates
+quiet rather than contributing zero movement. Later samples do not retroactively
+strengthen the original deadline assessment. Samples captured before incident
+declaration are excluded from its post-fall assessment.
+
+Automatic warnings begin with `Possible fall; condition unconfirmed`, with
+location and the applicable warning, or use two labelled parts if necessary.
+They do not assert that the wearer requested assistance. Explicit PRG responses
+retain the assistance, fall-confirmation and false-alarm texts described in
+[operation](operation.md). SOS continues through automatic warnings and delivery
+failures until an accepted response or loss of power.
+
+Buzzer-on samples remain available to detection and assessment. Trace rows report
+the commanded sound state at processing; buffered samples flag its timing
+uncertainty. No motion is presumed absent merely because sound is active.
+Mechanical coupling, mounting and tone-related false movement require bench
+measurement before any interference-specific correction is justified.
+
+[`FallIncidentStore.h`](../examples/companion_radio/health/FallIncidentStore.h)
+saves minimal unresolved-incident metadata in two checked, versioned records on
+the existing filesystem. Open, resolution and restart-recovery transitions write
+records; samples, traces, partial gestures and delivery retry progress are never
+written at sample rate. A resolution record acts as a tombstone so an older
+unresolved record does not normally reactivate an acknowledged incident.
+
+| Restart evidence | Behavior |
+| --- | --- |
+| Qualified continuous clock, if explicitly enabled in a future target configuration | Storage supports retaining elapsed response time and expiring records aged 24 hours or more. This path is tested but is not enabled for the current target. |
+| Current target: unqualified restart clock | Restore SOS and the original destination, report clock uncertainty, restore at most three times within the saved recovery budget, and treat the initial response deadline as already due. |
+| Resolved, expired or recovery-limit record | Do not restore the alarm. Expiry/limit writes a resolved record. |
+| Any existing corrupt/unreadable incident record | Report storage uncertainty and do not restore an older active record that might precede a lost resolution. |
+
+Recovery restores no motion or quiet evidence and no partially entered button
+gesture. A restored unresolved incident can issue a fresh automatic warning;
+original radio retry progress is not resumed. The ESP32 software clock resets at power-on and can be advanced by saved contact
+timestamps. A plausible epoch therefore does not establish elapsed downtime.
+The current target records an unknown origin time and uses the bounded
+unknown-clock policy; reliable wall-clock age and 24-hour expiry remain disabled
+until a continuous clock is explicitly qualified. The optional expiry policy
+concerns restart eligibility, not a cutoff for a continuously powered alarm.
+The three-recovery budget is
+enforceable only after successful writes; rapid resets before writing or failing
+storage cannot prove that a recovery count advanced.
+
+Pending writes and storage faults remain visible in `health detail`; failed
+writes retry at five-second intervals. Abrupt power loss before a transition is
+saved can lose a new incident or retain an older unresolved one. Physical power-cut
+and filesystem tests remain necessary. Normal flash operations may stall the
+loop; FIFO covers short stalls, while longer interruptions invalidate evidence.
 
 ## Tuning and software checks
 
-Edit `FallDetectionConfig` at the top of [`MotionRule.h`](../examples/companion_radio/health/MotionRule.h) and rebuild to change the active defaults. Custom code can instead pass a configuration to the `MotionRule` constructor. These settings are compile-time configuration; there is no runtime command to change them.
+All detector defaults are grouped in `FallDetectionConfig` in
+[`MotionRule.h`](../examples/companion_radio/health/MotionRule.h). They are compiled
+settings, not runtime USB/BLE setters. `context_paths = false` selects the strong
+sequence alone for controlled comparisons.
 
-Set `confirm_quiet_ms = 0` to compare the low-acceleration/impact/rotation sequence without post-event quiet confirmation. Startup settling, sample validation, and cooldown still apply. Use the [tuning guide](gy521_sensor.md#review-and-tune-the-algorithm) for configuration constraints and tradeoffs. Firm torso/chest attachment is the intended starting point; different placements require separate evaluation.
+| Configuration | Defaults and role |
+| --- | --- |
+| `low_g`, `impact_g`, `rotation_dps` | 0.35 g, 2.4 g, 240 degrees/s: strong sequence thresholds. |
+| `event_window_ms`, `pretrigger_ms` | 500 ms strong window; 300 ms preceding gyro association. |
+| `recovery_ms`, `recovery_samples` | At least 200 ms and six contiguous fresh samples after invalid evidence. |
+| `refractory_ms`, `max_sample_gap_ms` | 1200 ms event suppression; 100 ms maximum evidence gap. |
+| `quiet_min_g`, `quiet_max_g`, `quiet_max_dps` | 0.7 g, 1.3 g, 30 degrees/s: experimental-path quiet limits. |
+| `context_paths` | `true`: enable experimental vector/context paths. |
+| `context_angle_deg`, `slow_angle_deg` | 55 and 65 degrees relative orientation change. |
+| `support_impact_g`, `support_rotation_dps` | 1.6 g and 80 degrees/s for supported-descent evidence; 1.6 g also opens an impact candidate. |
+| `unload_g`, `slow_peak_g` | 0.85 g trough and 1.15 g peak for the slow path. |
+| `context_feature_ms`, `context_window_ms` | 2000 ms feature age when orientation support begins; 6000 ms total context candidate window. |
+| `confirm_quiet_ms`, `slow_quiet_ms`, `confirm_timeout_ms` | 1000 ms context quiet, 2000 ms slow quiet, 5000 ms confirmation deadline. |
 
-The [motion-rule tests](../test/test_motion_rule/test_motion_rule.cpp) replay synthetic 50 Hz recordings. They cover settling, ordinary motion and isolated peaks, missing sequence features, peak order, timing boundaries, repeated low readings, interrupted quiet, invalid data, sample gaps, duplicate timestamps, cooldown/reconnection, timer rollover, and custom settings including sequence-only mode. From the repository root, run:
+The reference-vector magnitude gate (0.85–1.15 g), 200–1000 ms reference age,
+64-entry history and 10 degrees/s unloading-trigger gate are explicit constants
+in `MotionRule.h`. They require review alongside any major threshold change.
+Configuration validation rejects
+nonfinite/nonpositive thresholds, unsafe timer values, incompatible duration or
+threshold relationships and unsupported history/recovery bounds. Invalid
+configuration reports `config-fault`; it does not silently appear armed.
+
+Lower thresholds or longer association windows can admit falls and ordinary
+activity alike. More quiet can reject activity but delay or miss soft falls with
+continued movement. The strong path can now alert despite continued motion;
+that removes a false-negative mechanism but also removes the prior quiet filter
+on device drops. Ordinary sitting, bending and lying down often lack combined
+trigger/transition evidence, yet rapid lying down, a loose attachment, or a dropped
+unworn device can match these paths. No wear/contact sensor distinguishes all
+those cases. Relative orientation avoids a universal lying-posture requirement
+but cannot cover every fall ending in a seated or unchanged orientation.
+
+The existing stationary gyro correction is applied. Temperature delta from the
+saved calibration and raw-versus-corrected readings are available for evaluation;
+no temperature compensation model or accelerometer calibration is applied.
+The current 50 Hz output and DLPF settings are retained pending recorded-data and
+bench comparison. Their bandwidths do not guarantee rejection of aliased vibration
+or capture of narrow impacts. Sampling phase, clipping and attachment are part of
+the validation, not solved by lowering thresholds.
+
+Relevant host suites exercise the production rule, acquisition driver, response
+and persistence classes and selected companion integration paths:
 
 ```powershell
-pio test -e native -f test_motion_rule
-pio test -e native -f test_fall_response
-pio test -e native -f test_low_battery
+pio test -e native
+pio test -e native_delivery
+pio run -e heltec_v4_companion_radio_ble
 ```
 
-This requires a host C++ compiler; the [sensor guide](gy521_sensor.md#polling-and-rule-customization) also documents the standalone C++11 harness. Passing these checks establishes software behavior, not sensitivity, specificity, false alerts per wear-day, or successful radio delivery. Voting, LSTM inference, and body-posture classification remain unimplemented; the studies below explain those possible future directions.
+See [build and validation](build-validation.md) and [virtual fault coverage](virtual-fault-testing.md)
+for setup, focused suites and harness boundaries. Synthetic regressions cover
+continued movement, missing features, supported/slow transitions, pre-trigger
+rotation, expiration/recovery, repeated incidents, acknowledgement, data loss,
+FIFO phase/jitter/overflow, daily-activity negatives, late quiet, restart and
+rollover. These are software behavior checks, not measured fall performance.
+
+Remaining evaluation needs include labelled recordings with held-out wearers and
+routine activities; true fall variants and device drops; sensor rate/phase and
+I2C load; BLE/RF traffic; buzzer coupling; temperature and calibration drift;
+power interruptions; actual recipient delivery and repeat behavior. Older adults
+must not be asked to perform falls for testing. Published results below do not
+supply validation for these firmware-specific paths.
 
 ## Fall-detection research
 
-The bibliography identifies **five distinct studies** and records the reference filenames used for the research review. Those filenames are provenance labels, not bundled project files. The current rule adapts the timed sequence from study [4](#study-4), with separately labeled project extensions. The other methods remain research context; none of the reported performance results has been reproduced or validated in SeniorHealthNode.
+The bibliography identifies **five distinct studies** and records the reference filenames used for the research review. Those filenames are provenance labels, not bundled project files. The strong sequence adapts study [4](#study-4). Relative-orientation paths, recovery, buffering and incident assessment are separately identified project extensions. The other methods remain research context; none of the reported performance results has been reproduced or validated in SeniorHealthNode.
 
 ### Research context
 
@@ -84,7 +336,7 @@ The bibliography identifies **five distinct studies** and records the reference 
 
 The following separates the implemented rule from further research and validation:
 
-- **Implemented: sequences as well as peaks.** The detector uses a bounded low-acceleration / impact / rotation window [4](#study-4) and an optional post-event quiet check. Study [2](#study-2) motivates exploring temporal context and posture, but quiet magnitudes do not classify lying and its two-node posture method is not implemented.
+- **Implemented: sequences and experimental temporal context.** The strong path uses a bounded low-acceleration / impact / rotation window [4](#study-4) without a quiet veto. Additional paths combine a relative gravity-vector change with impact or descent evidence and subsequent quiet. These project-specific paths do not reproduce a published classifier. Study [2](#study-2) motivates temporal context, but its chest-and-thigh posture method is not implemented; a relative orientation change does not classify lying or establish injury.
 - **Define how the node is worn.** Chest, thigh, waist, and phone-orientation results are not interchangeable [1](#study-1)-[5](#study-5). A nearby, unworn sensor measures its own movement and cannot directly infer the person's body motion. Placement, fastening, units, sensor ranges, and sampling timing need to be specified before adapting published thresholds.
 - **Compare methods on the same held-out recordings.** Evaluate a simple temporal rule before adding voting or an LSTM, and keep test wearers separate from threshold tuning or model training. Study [3](#study-3) demonstrates why performance must be measured rather than inferred from model complexity.
 - **Measure missed falls and false alerts separately.** Sensitivity is the fraction of falls detected; specificity is the fraction of non-fall activities correctly rejected. Overall accuracy alone can hide missed falls. A future evaluation should also report false alerts per wear-day, detection delay, and performance across routine activities and intended mounting positions.

@@ -43,7 +43,7 @@ physical output. See [wiring and polarity](gy521_sensor.md#buzzer-trigger-polari
 No. Any fixed orientation is valid. USB `calibrate` starts a countdown,
 15-second stationary measurement and independent validation. `calibrate save`
 explicitly saves and applies validated offsets. Detection pauses during collection
-and resumes through normal rearm afterward. Accelerometer calibration is not
+and resumes after bounded fresh-data recovery afterward. Accelerometer calibration is not
 included. See the [calibration guide](gyro_calibration.md) for USB/BLE commands,
 quality checks, cancellation and reset.
 
@@ -57,8 +57,19 @@ never DMs. They omit the node-name prefix and retain the other message details.
 
 **Does a repeater echo establish recipient reception of an alert?**
 It records a matching rebroadcast, not delivery to a particular companion or
-person. Retries can produce duplicate text. Pending alarms and messages are
-volatile and clear on reboot; saved channel settings persist.
+person. Retries can produce duplicate text. Delivery retry progress is volatile;
+a checked unresolved incident can restore an alarm under the bounded
+[restart policy](fall_detection.md#post-fall-assessment-and-restart-recovery).
+Saved channel settings persist.
+
+**Can another fall be detected soon after an alert or dismissal?**
+Yes. Detection has a short 1200 ms event refractory period, rather than a
+60-second classifier cooldown. New observations in one unresolved incident keep
+its original deadline and button progress. After resolution, a new event can
+start another alarm while notifications are coalesced separately. Experimental
+context paths cover some falls without free-fall or rapid rotation; they do not
+establish clinical accuracy or distinguish every device drop. See
+[detection paths and limits](fall_detection.md).
 
 **Where are setup and troubleshooting instructions?**
 Start with the [README](../README.md#getting-started), [sensor guide](gy521_sensor.md),

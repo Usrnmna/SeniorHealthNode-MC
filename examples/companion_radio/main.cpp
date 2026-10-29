@@ -118,6 +118,9 @@ void halt() {
 
 void setup() {
   Serial.begin(115200);
+#if ENV_INCLUDE_MPU6050
+  beginBoundedUsbOutput(); // Failure leaves optional diagnostic output unavailable.
+#endif
   board.begin();
 
 #ifdef HAS_EXTERNAL_WATCHDOG
@@ -252,6 +255,7 @@ void setup() {
     pinMode(HealthNodeConfig::charging_status_pin,
             HealthNodeConfig::charging_status_active_low ? INPUT_PULLUP : INPUT_PULLDOWN);
   Wire1.setTimeOut(HealthNodeConfig::sensor_i2c_timeout_ms);
+  the_mesh.restoreFallIncident(); // Buzzer and PRG input are initialized before recovery.
 #endif
   board.onBootComplete();
 }

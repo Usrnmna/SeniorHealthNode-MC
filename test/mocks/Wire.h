@@ -8,6 +8,11 @@
 class TwoWire {
 public:
   std::function<std::vector<uint8_t>(uint8_t, uint8_t)> response;
+  std::function<void(uint8_t, uint8_t)> write_observer;
+  void writeRegister(uint8_t address, uint8_t value) {
+    registers[address] = value;
+    if (write_observer) write_observer(address, value);
+  }
   std::vector<std::vector<uint8_t>> writes;
   std::vector<uint8_t> tx, rx;
   std::array<uint8_t, 256> registers{}; // Device configuration readback, after successful writes.
@@ -23,7 +28,7 @@ public:
   }
   uint8_t endTransmission(bool = true) {
     writes.push_back(tx); if (!tx.empty()) reg = tx[0];
-    if (status == 0 && tx.size() == 2) registers[reg] = tx[1];
+    if (status == 0 && tx.size() == 2) writeRegister(reg, tx[1]);
     return status;
   }
   uint8_t requestFrom(uint8_t, uint8_t count) {

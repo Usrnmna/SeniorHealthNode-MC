@@ -512,9 +512,9 @@ TEST(ProductionCrypto, AllFallMessagesRemainNamelessGroupTextsOnPublicAndPrivate
     {FallNoticeMessage::build(FallNotice::AssistanceRequested, true, 37.123456, -122.654321),
      "Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-122.654321"},
     {FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, false, 0, 0),
-     "Fall Detected & User Has Requested Assistance | HOME | USER COULD NOT CONFIRM THEIR CONDITION"},
+     "Possible fall; condition unconfirmed | HOME | USER COULD NOT CONFIRM THEIR CONDITION"},
     {FallNoticeMessage::build(FallNotice::NoResidualMovement, true, -90, -180),
-     "Fall Detected & User Has Requested Assistance | lat=-90.000000, lon=-180.000000 | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER"},
+     "Possible fall; condition unconfirmed | lat=-90.000000, lon=-180.000000 | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER"},
     {FallNoticeMessage::build(FallNotice::UserConfirmedFall, true, 1, 2),
      "USER HAS CONFIRMED FALL"},
     {FallNoticeMessage::build(FallNotice::UserConfirmedFalseAlarm, true, 37.123456, -122.654321),
@@ -557,7 +557,7 @@ TEST_F(AssistanceChannel, AutomaticWarningDecryptsWithExactAppendedText) {
   finishLocal(); deliver(sender.radio.frames[0]);
   ASSERT_EQ(1u, receiver.mesh.plaintexts.size());
   const auto& bytes = receiver.mesh.plaintexts[0];
-  EXPECT_EQ("Fall Detected & User Has Requested Assistance | HOME | USER COULD NOT CONFIRM THEIR CONDITION",
+  EXPECT_EQ("Possible fall; condition unconfirmed | HOME | USER COULD NOT CONFIRM THEIR CONDITION",
       decodedText(bytes));
 }
 

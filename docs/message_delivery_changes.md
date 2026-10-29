@@ -25,10 +25,11 @@ retained. This applies to both public and private group channels.
 `MyMesh::pollMotion()` creates the initial channel text:
 
 ```text
-Possible fall: peak accel=2.80g rotation=260.0deg/s
+Possible fall (strong-sequence): peak accel=2.80g rotation=260.0deg/s
 ```
 
-The values are the detected sequence's peaks. `MyMesh::pollFallResponse()`
+The path identifies the supporting detector evidence; values preserve the event peaks.
+The [detector reference](fall_detection.md) defines the experimental paths and limits. `MyMesh::pollFallResponse()`
 creates a separate event after three accepted PRG clicks, using `ack_message`
 and the location selected at that event's creation:
 
@@ -37,11 +38,19 @@ Fall Detected & User Has Requested Assistance | HOME
 Fall Detected & User Has Requested Assistance | lat=37.123456, lon=-122.654321
 ```
 
-The initial-alert controller owns one volatile event and coalesces repeated alerts
-while busy. Response delivery uses a bounded outbox: one active event, one waiting
-ordinary event, and a reserved confirmation slot. A full slot leaves the request
+Initial-alert transport owns one immutable event; `FallInitialAlert` retains one
+waiting latest incident. Repeated observations of the same unresolved incident
+do not restart its retry budget, even after its initial delivery finishes. Several
+new incidents while transport is busy replace the waiting slot with the newest
+and increment the visible coalesced count. Response delivery uses a bounded outbox: one active event, one waiting
+ordinary event, and a reserved slot for all explicit PRG responses, including
+early assistance requests. A full slot leaves the request
 pending in `FallResponse`; repeated unscheduled ordinary events may coalesce, but
-a pending confirmation is protected. Each accepted event freezes its text and
+a pending explicit response is protected. If confirmation capacity stays saturated
+while a newer incident is resolved, local SOS still stops, but the newer
+confirmation can be omitted rather than replacing the earlier owner.
+`health detail` exposes `dropped_confirmations`; bounded queues cannot guarantee
+transmission of every response during prolonged delivery failure. Each accepted event freezes its text and
 location. False-alarm cancellation is scoped to the incident ID captured by the
 initial-alert controller; a coalesced newer detection cannot change that owner.
 Initial-alert and response delivery progress concurrently using
@@ -123,7 +132,10 @@ budget. Even after a first-part failure, the second part is attempted;
 
 ## Post-fall response directives
 
-The initial `Possible fall` message and the detection thresholds remain unchanged.
+Detector paths and the initial text are defined in the
+[maintained detector reference](fall_detection.md). Automatic warnings use
+`Possible fall; condition unconfirmed` with location; only a button-requested
+assistance event uses `ack_message`.
 `FallResponse::updateButton()` runs before `updateDeadline()`, so a gesture already
 confirmed by debounce wins a deadline reached in the same loop. A third release
 whose debounce finishes after the deadline produces a late confirmation.
@@ -132,15 +144,18 @@ whose debounce finishes after the deadline produces a late confirmation.
 | --- | --- | --- |
 | Two complete presses in one second; three-second decision window closes without a debounced third press | `User Confirms False Alarm` with GPS or fallback location, before or after escalation | Stop when accepted after the window |
 | Three accepted presses before escalation | Existing `ack_message` with GPS or fallback location | Stop immediately |
-| No accepted response at 30 seconds; moving or unknown | Assistance+location, then ` | USER COULD NOT CONFIRM THEIR CONDITION` | Keep repeating |
-| No accepted response at 30 seconds; final continuous quiet window satisfied | Assistance+location, then ` | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER` | Keep repeating |
+| No accepted response at 30 seconds; moving or unknown | Possible-fall context and location, then ` | USER COULD NOT CONFIRM THEIR CONDITION` | Keep repeating |
+| No accepted response at 30 seconds; final continuous quiet window satisfied | Possible-fall context and location, then ` | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER` | Keep repeating |
+| Later fresh 10-second quiet after a general warning is accepted by the outbox | One no-residual-movement update with possible-fall context and location | Keep repeating |
 | Three accepted presses after either automatic warning | Independent `USER HAS CONFIRMED FALL` (no node-name prefix or location suffix) | Stop immediately |
 
-Only one automatic warning is selected per incident. Motion resuming afterward
-does not send a retraction or stop SOS. Sending, hearing a repeat, and exhausting
+One warning is selected at the original deadline. If it is the general warning,
+one later qualifying quiet assessment can produce an upgrade. Motion resuming
+afterward does not send a retraction or stop SOS. Sending, hearing a repeat, and exhausting
 retries do not close the incident. Double and triple presses remain available without
-an incident-age limit while the powered firmware is running. Reboot and shutdown clear volatile
-state. The existing SOS pattern, including its five-second pause, remains intact.
+an incident-age limit while the powered firmware is running. Restart clears
+motion/gesture/retry state but can restore a checked unresolved alarm through
+[bounded incident recovery](fall_detection.md#post-fall-assessment-and-restart-recovery). The existing SOS pattern, including its five-second pause, remains intact.
 
 The first press-down starts both gesture timers. The second release must occur
 within 1000 ms; the false-alarm decision waits until elapsed time exceeds 3000 ms.
@@ -166,7 +181,7 @@ all text using two ordinary channel messages:
 
 ```text
 [1/2] NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER
-[2/2] Fall Detected & User Has Requested Assistance | Main residence, upstairs bedroom at the far end of the eastern hallway
+[2/2] Possible fall; condition unconfirmed | Main residence, upstairs bedroom at the far end of the eastern hallway
 ```
 
 The warning is first so location delivery does not precede the essential warning.
@@ -192,7 +207,7 @@ responses; stopping SOS does not depend on successful transmission.
 1. Add its plain text and any tunables to `HealthNodeConfig.h`, with units and guards.
 2. Add a named `FallNotice` and its text mapping in `FallNotice.h`; classify it in
    `isAutomaticWarning()` if it follows the automatic-warning formatting/lifecycle,
-   or `isUserConfirmation()` for reserved response capacity and warning supersession.
+   or `isExplicitResponse()` for reserved response capacity and warning supersession.
 3. Add its condition in the focused response methods in `FallResponse.h`. Keep
    user confirmation first, then specific warnings, then the general fallback.
 4. Add observable-behavior tests to `test_post_fall`; update this condition table.
@@ -202,10 +217,10 @@ responses; stopping SOS does not depend on successful transmission.
 `FallDetectionConfig::max_sample_gap_ms` in `MotionRule.h` remains 100 ms, with
 nominal sampling every 20 ms. `MotionHealth` uses that same threshold to count
 completed fresh-valid sample intervals exceeding it. `max_gap_ms` is the longest
-completed interval; a still-open outage is exposed by `motion=FAULT` after its
+completed interval; a still-open outage is exposed by `sensor=FAULT` after its
 timeout and contributes a gap when sampling resumes. No interval is invented
 before the first valid fresh sample. Recovery clears the health fault but does
-not bypass the detector's normal quiet-rearm rules. Raising the gap threshold
+not bypass the detector's bounded fresh-data recovery or short event refractory period. Raising the gap threshold
 cannot recover motion that was never sampled.
 
 ## Code ownership and review points
@@ -230,20 +245,23 @@ cannot recover motion that was never sampled.
   owns bounded pending capacity and multipart progression; `AssistanceDelivery::supersede()`
   retires old tags/hashes before queued cancellation can invoke a callback.
   Normal companion messaging continues alongside the two fall-message streams.
-- `MotionHealth` observes every sensor poll without changing the driver or
-  detector. `HealthMonitor.cpp` prints fault/recovery transitions and exposes `health`.
-  No new interrupt/FIFO sampling path or general blocking-I/O rewrite is included.
+- `MotionHealth` observes current sensor validity/freshness. `HealthMonitor.cpp`
+  feeds bounded chronological FIFO batches to detection, post-fall assessment and
+  traces, and reports availability independently of prolonged sensor health.
+  [Acquisition and evidence](fall_detection.md#runtime-behavior) describe the
+  current buffering, loss policy and diagnostic output.
 - `platformio.ini` defines `native_delivery` with production Mesh and Crypto sources
   and the small `test/transport_support` host adapters. It excludes the ordinary
   suite's crypto mocks. `verify.ps1` runs both `native` and `native_delivery` so
   the transport integration suite cannot be omitted from full verification.
 
-Use serial at 115200 baud and enter `health` followed by carriage return. It reports
-`fall=...; help=...; motion=...; max_gap_ms=...; gaps=...; part_failed=...`. `help`
-describes the current response part; `part_failed` retains a prior part failure.
-`monitoring` means no
-prolonged sample outage is currently latched; it is not proof that the rule is armed
-or that a person has not fallen. `motion` continues to show sensor measurements.
+Use serial at 115200 baud and enter `health` to inspect
+`fall=...; help=...; sensor=...; detector=...; age_ms=...; gaps=...`.
+`help` describes the current response part; `health detail` adds `part_failed`,
+which retains a prior multipart failure until the next event. Sensor validity
+and a lack of prolonged faults do not establish detector readiness or a wearer's
+condition. The [USB reference](usb_cli_reference.md#health-and-motion-inspection)
+defines availability, trace, FIFO and persistence diagnostics.
 
 ## Validation and further changes
 
@@ -279,5 +297,10 @@ the state contract, update its native tests and this directive map together.
 For rollback, preserve a Git snapshot of the whole delivery change and restore
 the controller, integration, packet metadata, dispatcher, tests, and documentation
 as a coherent set. Removing only the completion hook can strand pending requests.
-Reboot still clears all delivery, SOS, partial-click, and detector state; delivery events are not persisted, retried after reboot, or exposed through a manual
-resend command. The selected channel is persisted separately by `FallChannelStore`.
+Delivery payloads/retry progress, partial clicks and motion evidence remain
+volatile. `FallIncidentStore` persists minimal unresolved-incident metadata, so
+a checked record can restore SOS and issue a new assessment after reboot under
+the bounded clock-uncertain policy. It does not resume the former radio retry
+queue or provide a manual resend command. `FallChannelStore` persists the
+selection for future incidents separately. See
+[recovery limitations](fall_detection.md#post-fall-assessment-and-restart-recovery).

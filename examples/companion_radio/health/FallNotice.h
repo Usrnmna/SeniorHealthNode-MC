@@ -6,8 +6,11 @@
 enum class FallNotice { None, AssistanceRequested, UserCouldNotConfirm, NoResidualMovement,
                         UserConfirmedFall, UserConfirmedFalseAlarm };
 
-inline bool isUserConfirmation(FallNotice notice) {
-  return notice == FallNotice::UserConfirmedFall || notice == FallNotice::UserConfirmedFalseAlarm;
+// Every accepted PRG response has the same ownership and queue priority,
+// including an assistance request made before the automatic warning deadline.
+inline bool isExplicitResponse(FallNotice notice) {
+  return notice == FallNotice::AssistanceRequested || notice == FallNotice::UserConfirmedFall ||
+      notice == FallNotice::UserConfirmedFalseAlarm;
 }
 
 inline bool isAutomaticWarning(FallNotice notice) {

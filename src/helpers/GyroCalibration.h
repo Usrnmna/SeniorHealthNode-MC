@@ -36,19 +36,23 @@ public:
   void reset() { phase = Idle; candidate = Result{}; stats = Statistics{}; detail = "default"; }
 
   // Check timeout and freshness on every loop, not only when a sample arrives.
-  void tick(uint32_t now, bool sensor_valid) {
+  void tick(uint32_t now, bool sensor_valid, bool buffered_samples = false) {
     using namespace HealthNodeConfig;
     if (pending() && uint32_t(now - phase_at) >= gyro_calibration_candidate_ms) fail("candidate-expired");
     if (!active()) return;
     if (!sensor_valid) fail("sensor-error");
     else if (uint32_t(now - started_at) >= gyro_calibration_timeout_ms) fail("timeout");
-    else if (uint32_t(now - last_fresh) > gyro_calibration_max_gap_ms) fail("sample-gap");
+    // A bounded FIFO batch supplies chronological coverage through observe().
+    // Its backlog may defer freshness expiry, but never the overall timeout.
+    else if (!buffered_samples && uint32_t(now - last_fresh) > gyro_calibration_max_gap_ms) fail("sample-gap");
   }
 
   // Call once per accepted DATA_RDY sample. Variability restarts collection;
   // invalid data aborts instead of turning a sensor fault into an offset.
   template<class Reading> void observe(uint32_t now, const Reading& v) {
     using namespace HealthNodeConfig;
+    // FIFO samples captured before a start/restart cannot enter the new window.
+    if (active() && uint32_t(now - last_fresh) >= 0x80000000u) return;
     tick(now, true);
     if (!active()) return;
     last_fresh = now;

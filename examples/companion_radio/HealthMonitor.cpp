@@ -1,4 +1,10 @@
+// Host verification substitutes hardware and service boundaries, while compiling
+// these same orchestration methods. Firmware always uses the real companion.
+#ifdef HEALTH_MONITOR_HOST_HEADER
+#include HEALTH_MONITOR_HOST_HEADER
+#else
 #include "MyMesh.h"
+#endif
 #if ENV_INCLUDE_MPU6050
 #include <HealthNodeConfig.h>
 #include "health/MotionRule.h"
@@ -13,6 +19,48 @@
 #include <helpers/ui/AlarmBuzzer.h>
 
 AlarmBuzzer alarm_buzzer; // Include AlarmBuzzer.h elsewhere to call alarm_buzzer.beep().
+
+// Restore only a checked unresolved incident. No samples or quiet evidence survive
+// reboot. Clock plausibility and recovery limits are reported independently.
+void MyMesh::restoreFallIncident() {
+  // The ESP32 fallback epoch and saved contact timestamps do not prove elapsed
+  // time across power loss. Use bounded unknown-clock recovery on this target.
+  const auto recovery = FallIncidentStore::load(*_store->getPrimaryFS(), getRTCClock()->getCurrentTime(), false);
+  recovery_outcome = recovery.outcome; durable_incident = recovery.value;
+  fall_response.seedIncident(durable_incident.incident);
+  if (recovery.shouldResume()) {
+    fall_response.restore(millis(), recovery.elapsed_ms, durable_incident.incident,
+        durable_incident.channel, digitalRead(PIN_USER_BTN)==LOW);
+    alarm_buzzer.startSOS();
+    FallIncidentStore::countRecovery(durable_incident);
+    persistence_dirty = true;
+  } else if (recovery.outcome == FallIncidentStore::Expired || recovery.outcome == FallIncidentStore::RecoveryLimit) {
+    durable_incident.active=false; persistence_dirty=true;
+  } else if (recovery.outcome == FallIncidentStore::Corrupt) persistence_fault=true;
+}
+
+// Queue one small durable state transition. A newer resolution/open supersedes
+// an unwritten transition; no sample-rate flash writes are performed.
+void MyMesh::recordIncident(bool active) {
+  if (active) {
+    durable_incident = FallIncidentStore::Incident{};
+    durable_incident.incident=fall_response.incidentId();
+    durable_incident.origin_epoch=0; // No qualified continuous wall clock on this target.
+    durable_incident.channel=fall_response.incidentChannel();
+  }
+  durable_incident.active=active; persistence_dirty=true; persistence_attempted=false;
+}
+
+void MyMesh::pollIncidentPersistence(uint32_t now) {
+  if (!persistence_dirty || (persistence_attempted && uint32_t(now-persistence_retry_at)<5000)) return;
+  persistence_attempted=true; persistence_retry_at=now;
+  const uint32_t write_started=millis();
+  persistence_fault=!FallIncidentStore::save(*_store->getPrimaryFS(),durable_incident);
+  motion_timing.persistence(uint32_t(millis()-write_started));
+  if (!persistence_fault) persistence_dirty=false;
+  // Filesystem operations may stall; FIFO captures short stalls, and longer
+  // interruptions are explicitly invalidated by the acquisition layer.
+}
 static_assert(HealthNodeConfig::buzzer_pin != ENV_PIN_SDA &&
               HealthNodeConfig::buzzer_pin != ENV_PIN_SCL &&
               HealthNodeConfig::buzzer_pin != PIN_USER_BTN, "Buzzer pin conflicts with sensor/PRG");
@@ -30,10 +78,10 @@ void MyMesh::reportAssistance() {
   // Serial only: no OLED/UI modifications or alterations to public text.
   if (reported_fall != fall_delivery.state()) {
     reported_fall = fall_delivery.state();
-    Serial.printf("Fall channel: %s; attempts=%u\n", fall_delivery.status(), fall_delivery.attemptCount());
+    usb_reply.append("Fall channel: %s; attempts=%u\n", fall_delivery.status(), fall_delivery.attemptCount());
   } else if (reported_help != assistance.state()) {
     reported_help = assistance.state();
-    Serial.printf("Assistance channel: %s; attempts=%u\n", assistance.status(), assistance.attemptCount());
+    usb_reply.append("Assistance channel: %s; attempts=%u\n", assistance.status(), assistance.attemptCount());
   }
 }
 uint32_t MyMesh::uniqueTimestamp() { return getRTCClock()->getCurrentTimeUnique(); }
@@ -50,97 +98,174 @@ void MyMesh::pollLowBattery() {
   const bool charging = charging_status_pin >= 0 &&
       digitalRead(charging_status_pin) == (charging_status_active_low ? LOW : HIGH);
   const bool due = battery_alert.update(now, battery_mv, charging);
-  if (gyro_calibration.active()) { alarm_buzzer.stopLowBattery(); return; }
+  if (gyro_calibration.active()) { alarm_buzzer.stopLowBattery(); captureBuzzer(); return; }
   if (!battery_alert.isActive()) alarm_buzzer.stopLowBattery(); // Never stop SOS.
   else if (due && alarm_buzzer.startLowBattery()) battery_alert.markPlayed(now);
+  captureBuzzer();
 }
 
 void MyMesh::pollFallResponse() {
   const uint32_t now = millis();
-  if (fall_response.updateButton(now, digitalRead(PIN_USER_BTN) == LOW)) {
+  const bool pressed=digitalRead(PIN_USER_BTN)==LOW;
+  uint8_t response_before[160];
+  MotionCapture::Writer before(response_before,sizeof(response_before));
+  if (motion_recorder.active()) MotionCaptureCheckpoint::response(before,fall_response);
+  const bool acknowledged=fall_response.updateButton(now,pressed);
+  if (acknowledged) {
     alarm_buzzer.stop();
+    captureBuzzer();
+    recordIncident(false);
     if (fall_response.falseAlarmConfirmed()) {
       const uint32_t incident = fall_response.incidentId();
       fall_delivery.supersedeIncident(*this, incident);
+      initial_alert.cancel(incident);
       fall_notices.cancelWarnings(incident, *this, assistance);
     }
-    Serial.println("Fall acknowledged: SOS stopped; user response pending");
+    usb_reply.append("Fall acknowledged: SOS stopped; user response pending\n");
   }
   fall_response.updateDeadline(now); // Never stop SOS on a timeout or delivery outcome.
+  if (motion_recorder.active()) {
+    MotionCapture::Writer after(capture_buffer,sizeof(capture_buffer));
+    MotionCaptureCheckpoint::response(after,fall_response);
+    if (!before.ok() || before.size()!=after.size() || memcmp(response_before,capture_buffer,before.size()))
+      captureResponse(MotionCapture::Service,now,pressed,acknowledged);
+  }
   if (fall_response.messagePending()) {
     double latitude, longitude;
     const bool fix = FallAckLocation::read(sensors, latitude, longitude);
     const auto notice = fall_response.pendingNotice();
     const auto message = FallNoticeMessage::build(notice, fix, latitude, longitude);
     if (fall_notices.enqueue(notice, fall_response.pendingIncident(), message, fall_response.pendingChannel())) {
-      Serial.printf("Fall response: %s; parts=%u\n", fallNoticeText(notice), message.count);
+      usb_reply.append("Fall response: %s; parts=%u\n", fallNoticeText(notice), message.count);
       fall_response.messageAccepted(); // Outbox now owns the immutable event.
+      captureResponse(MotionCapture::Accept,now);
       reported_help = AssistanceDelivery::Idle;
     }
   }
   fall_notices.poll(now, *this, assistance);
   fall_delivery.poll(now, *this);
+  initial_alert.poll(now, *this, fall_delivery);
+  pollIncidentPersistence(now);
   reportAssistance();
   alarm_buzzer.loop();
+  captureBuzzer();
+}
+
+DetectorAvailability::Cause MyMesh::availabilityCause(uint32_t now) const {
+  using A=DetectorAvailability;
+  if (!motion_rule.configured()) return A::ConfigurationFault;
+  if (gyro_calibration.active()) return A::Calibration;
+  // Startup ends when fresh data arrives or the existing outage fault latches.
+  if (!motion_seen) return motion_health.fault() ? A::SensorUnavailable : A::Startup;
+  if (!sensors.motion.valid) return A::SensorUnavailable;
+  if (sensors.motion.sampleAgeMs(now)>motion_rule.settings().max_sample_gap_ms) return A::Stale;
+  if (motion_rule.currentState()==MotionRule::Recovering) return A::Recovery;
+  if (motion_rule.currentState()==MotionRule::Refractory) return A::Refractory;
+  return A::Available;
+}
+
+const char* MyMesh::motionAvailability(uint32_t now) const {
+  const auto cause=availabilityCause(now);
+  return cause==DetectorAvailability::Available ? motion_rule.stateName() : DetectorAvailability::name(cause);
+}
+
+void MyMesh::observeDetectorAvailability(uint32_t now) {
+  detector_availability.observe(now, availabilityCause(now),
+      sensors.motion.sampleAgeMs(now), motion_rule.settings().max_sample_gap_ms);
 }
 
 void MyMesh::pollMotion() {
-  const uint32_t now = millis();
-  const bool fresh = sensors.motion.poll(now);
-  motion_health.observe(now, sensors.motion.valid, fresh);
+  static_assert(HealthNodeConfig::motion_sample_ms == FallDetectionConfig::sample_period_ms,
+      "Detector timing validation must match acquisition cadence");
+  uint32_t now = millis();
+  motion_timing.begin(now);
+  observeDetectorAvailability(now);
   const bool was_calibrating = gyro_calibration.active();
-  gyro_calibration.tick(now, sensors.motion.valid);
-  if (fresh) gyro_calibration.observe(now, sensors.motion.raw_values);
-  if (gyro_calibration.state() != calibration_reported_state ||
-      (gyro_calibration.active() && uint32_t(now - calibration_reported_at) >= 1000)) {
-    char status[120]; gyro_calibration.describe(now, status, sizeof(status));
-    Serial.printf("Calibration: %s; detection=%s\n", status,
-        gyro_calibration.active() ? "paused" : "resuming-with-normal-rearm");
-    calibration_reported_state = gyro_calibration.state(); calibration_reported_at = now;
-  }
-  if (motion_health.fault() != last_motion_fault) {
-    last_motion_fault = motion_health.fault();
-    Serial.println(last_motion_fault ? "Motion FAULT: no fresh valid samples; detection unavailable"
-                                     : "Motion recovered: fresh samples; detector must rearm");
-  }
-  // Calibration is an explicit maintenance pause. Invalidate partial evidence on
-  // entry and exit so handling or a coefficient change cannot complete a fall.
-  if (was_calibrating || gyro_calibration.active()) {
-    fall_response.motionUnavailable();
-    motion_rule.update(now, 0, 0, false);
-    motion_statistics.observe(now, sensors.motion.values, sensors.motion.raw_values,
-        fresh, sensors.motion.valid, FallDetectionConfig{}.max_sample_gap_ms);
-    return;
-  }
-  // Outside maintenance, sensor validity gates analysis independently of delivery.
-  if (!sensors.motion.valid) {
-    fall_response.motionUnavailable();
-    motion_rule.update(now, 0, 0, false);
-    return;
-  }
-  if (!fresh) return;
-  const auto& v = sensors.motion.values;
-  const float acceleration = v.acceleration(), rotation = v.rotation();
-  fall_response.observeMotion(now, v.ax, v.ay, v.az, rotation);
-  if (motion_rule.update(now, acceleration, rotation, true)) {
-    // Coalesce notifications without resetting SOS/button progress or cancelling
-    // an earlier channel alert. MotionRule still enforces its normal cooldown.
-    if (fall_response.onFall(now, digitalRead(PIN_USER_BTN) == LOW, fall_channel)) {
-      alarm_buzzer.startSOS();
-      fall_response.observeMotion(now, v.ax, v.ay, v.az, rotation);
+  // At most two small FIFO transactions per normal batch; never drain without a bound.
+  for (unsigned budget = 0; budget < 4; ++budget) {
+    const bool fresh = sensors.motion.poll(millis());
+    // I2C and its shared-bus mutex take wall time. Freshness, declaration and
+    // calibration deadlines must use the time after the acquisition completes.
+    now = millis();
+    captureAcquisition();
+    const auto generation = sensors.motion.discontinuityGeneration();
+    if (generation != motion_generation) {
+      motion_generation = generation;
+      fall_response.motionUnavailable();
+      motion_rule.update(now, 0, 0, false);
+      captureInvalidation(now,now);
+      gyro_calibration.tick(now, false);
+      motion_trace.record(now, 0, 0, motion_rule.currentState(), MotionRule::SampleGap, 0x100, true);
     }
-    char text[120];
-    // Report the detected sequence's peaks, not the later quiet sample.
-    snprintf(text, sizeof(text), "Possible fall: peak accel=%.2fg rotation=%.1fdeg/s",
-             motion_rule.peakAcceleration(), motion_rule.peakRotation());
-    uint8_t payload[FallAckMessage::max_payload_bytes];
-    const unsigned len = FallAckMessage::encode(payload, 0, text);
-    const bool accepted = fall_delivery.begin(now, *this, payload, len,
-        fall_response.incidentChannel(), fall_response.incidentId());
-    Serial.printf("%s (%s)\n", text, accepted ? "channel event accepted" : "coalesced with pending alert");
+    motion_health.observe(now, sensors.motion.valid, fresh &&
+        sensors.motion.sampleAgeMs(now) <= motion_rule.settings().max_sample_gap_ms);
+    if (!sensors.motion.valid) {
+      fall_response.motionUnavailable();
+      motion_rule.update(now, 0, 0, false);
+      // Keep the first invalid transition and reason clearing, then omit exact
+      // no-ops while the stream remains invalid instead of flooding USB.
+      if (!capture_invalid || capture_invalid_reason!=uint8_t(motion_rule.lastReason()))
+        captureInvalidation(now,now);
+      if (motion_rule.lastReason() != MotionRule::None)
+        motion_trace.record(now, 0, 0, motion_rule.currentState(), motion_rule.lastReason(), 0x100, true);
+      break;
+    }
+    if (!fresh) break;
+    motion_seen=true;
+    const uint32_t sample_at = sensors.motion.sampleTimeMs();
+    motion_timing.sample(sample_at,now);
+    const auto& v = sensors.motion.values;
+    const auto& raw = sensors.motion.raw_values;
+    gyro_calibration.observe(sample_at, raw);
+    const float acceleration = v.acceleration(), rotation = v.rotation();
+    const bool maintenance = was_calibrating || gyro_calibration.active();
+    bool fired = false;
+    if (maintenance) {
+      fall_response.motionUnavailable(); motion_rule.update(sample_at, 0, 0, false);
+    } else {
+      fall_response.observeMotion(sample_at, v.ax, v.ay, v.az, rotation);
+      fired = motion_rule.update(sample_at, v.ax, v.ay, v.az, rotation, true);
+    }
+    // Buffered samples carry current commanded buzzer state, with temporal uncertainty
+    // flagged; no sample is discarded or classified as still because sound is active.
+    const uint16_t quality = sensors.motion.sampleQuality() | (maintenance ? 0x200 : 0) |
+        (sensors.motion.sampleAgeMs(now) > HealthNodeConfig::motion_sample_ms ? 0x400 : 0);
+    motion_trace.observe(sample_at, raw, v, motion_rule.currentState(), motion_rule.lastReason(),
+        quality, alarm_buzzer.sounding(), motion_rule.decision(),
+        motion_rule.referenceValid(), motion_rule.referenceTimeMs(), motion_rule.settings().pretrigger_ms);
+    captureSample(sample_at,now,maintenance,fired,quality);
+    if (fired) {
+      const bool pressed=digitalRead(PIN_USER_BTN)==LOW;
+      const bool new_alarm=fall_response.onFall(now,pressed,fall_channel);
+      captureResponse(MotionCapture::Fall,now,pressed,new_alarm);
+      if (new_alarm) {
+        alarm_buzzer.startSOS(); recordIncident(true);
+        captureBuzzer();
+      }
+      char text[140];
+      snprintf(text, sizeof(text), "Possible fall (%s): peak accel=%.2fg rotation=%.1fdeg/s",
+          MotionRule::reasonName(motion_rule.eventKind()), motion_rule.peakAcceleration(), motion_rule.peakRotation());
+      // An unresolved incident keeps its original deadline and delivery retry budget.
+      // A completed initial delivery is not restarted by another event in that incident.
+      initial_alert.enqueue(fall_response.incidentId(), fall_response.incidentChannel(), text);
+    }
+    motion_statistics.observeWithMagnitudes(sample_at, v, raw, acceleration, rotation,
+        motion_rule.settings().max_sample_gap_ms);
+    if (!sensors.motion.queuedSamples()) break;
   }
-  motion_statistics.observeWithMagnitudes(now, v, sensors.motion.raw_values, acceleration, rotation,
-      FallDetectionConfig{}.max_sample_gap_ms);
+  // Expire only after processing available chronological coverage. Any remaining
+  // backlog is bounded and invalidated on overflow/age by the acquisition layer.
+  now = millis();
+  gyro_calibration.tick(now, sensors.motion.valid, sensors.motion.queuedSamples()!=0);
+  observeDetectorAvailability(now);
+  if (gyro_calibration.state() != calibration_reported_state) {
+    calibration_reported_state = gyro_calibration.state(); calibration_reported_at = now;
+    motion_trace.record(now, 0, 0, motion_rule.currentState(), MotionRule::InvalidSample,
+        gyro_calibration.active() ? 0x200 : 0);
+  }
+  last_motion_fault = motion_health.fault();
+  captureCalibration();
+  motion_timing.finish(millis());
 }
 bool MyMesh::handleHealthCommand(const char* command, char* reply) {
   if (strcmp(command, "calibrate") == 0 || strncmp(command, "calibrate ", 10) == 0) {
@@ -204,17 +329,17 @@ bool MyMesh::handleHealthCommand(const char* command, char* reply) {
     return true;
   }
   if (strcmp(command, "health") == 0) {
-    snprintf(reply, 160, "fall=%s; help=%s; motion=%s; max_gap_ms=%lu; gaps=%lu; part_failed=%u",
-        fall_delivery.status(), assistance.status(), gyro_calibration.active() ? "CALIBRATING" :
-        (motion_health.fault() ? "FAULT" : "monitoring"),
-        (unsigned long)motion_health.maxGapMs(), (unsigned long)motion_health.gapCount(),
-        unsigned(fall_notices.partFailed()));
+    snprintf(reply, 160, "fall=%s; help=%s; sensor=%s; detector=%s; age_ms=%lu; gaps=%lu",
+        fall_delivery.status(), assistance.status(), motion_health.fault() ? "FAULT" :
+        (sensors.motion.valid ? "valid" : "unavailable"), motionAvailability(millis()),
+        (unsigned long)sensors.motion.sampleAgeMs(millis()), (unsigned long)motion_health.gapCount());
     return true;
   }
   if (strcmp(command, "beep") == 0) {
     if (gyro_calibration.active()) strcpy(reply, "Beep unavailable during calibration");
     else if (!alarm_buzzer.isEnabled()) strcpy(reply, "Buzzer disabled by buzzer_enabled=false");
     else strcpy(reply, alarm_buzzer.beep() ? "Beep started" : "Beep unavailable or alarm active");
+    captureBuzzer();
     return true;
   }
   if (strcmp(command, "motion") == 0 || strcmp(command, "motion raw") == 0) {
@@ -231,14 +356,13 @@ bool MyMesh::handleHealthCommand(const char* command, char* reply) {
 // an unresolved response. Ordinary BLE and mesh traffic remain available.
 bool MyMesh::calibrationIncidentBusy() const {
   return fall_response.alarmActive() || fall_response.messagePending() ||
-      fall_delivery.busy() || assistance.busy() || fall_notices.busy();
+      fall_delivery.busy() || assistance.busy() || fall_notices.busy() || initial_alert.pending();
 }
 
 // Shared USB/BLE transaction: 0 success, 1 rejected action, 2 persistence failure.
 // Read-only inspection is available during collection and active fall incidents.
 uint8_t MyMesh::controlCalibration(const char* action, char* reply) {
   const uint32_t now = millis();
-  gyro_calibration.tick(now, sensors.motion.valid);
   if (strcmp(action, "status") == 0) {
     gyro_calibration.describe(now, reply, 160); return 0;
   }
@@ -254,6 +378,9 @@ uint8_t MyMesh::controlCalibration(const char* action, char* reply) {
   if (strcmp(action, "cancel") == 0) {
     gyro_calibration.cancel();
     motion_rule.update(now, 0, 0, false);
+    captureInvalidation(now,millis(),1);captureCalibration();
+    motion_trace.record(now,0,0,motion_rule.currentState(),MotionRule::InvalidSample,0x200,true);
+    observeDetectorAvailability(now);
     strcpy(reply, "Cancelled; saved correction retained; detection resumes with normal rearm"); return 0;
   }
   if (strcmp(action, "start") && strcmp(action, "save") && strcmp(action, "reset")) {
@@ -271,7 +398,11 @@ uint8_t MyMesh::controlCalibration(const char* action, char* reply) {
       strcpy(reply, "Error: calibration active or unsaved; use status/save/cancel"); return 1;
     }
     alarm_buzzer.stop();
+    captureBuzzer();
     motion_rule.update(now, 0, 0, false);
+    captureInvalidation(now,millis(),1);captureCalibration();
+    motion_trace.record(now,0,0,motion_rule.currentState(),MotionRule::InvalidSample,0x200,true);
+    observeDetectorAvailability(now);
     strcpy(reply, "Started; detection paused; keep still for countdown, 15s measurement and validation"); return 0;
   }
   if (gyro_calibration.active()) {
@@ -289,6 +420,9 @@ uint8_t MyMesh::controlCalibration(const char* action, char* reply) {
   motion_statistics.reset(now, "calibration-changed");
   if (reset) gyro_calibration.reset(); else gyro_calibration.saved();
   motion_rule.update(now, 0, 0, false);
+  captureInvalidation(now,millis(),1);captureCalibration();
+  motion_trace.record(now,0,0,motion_rule.currentState(),MotionRule::InvalidSample,0x200,true);
+  observeDetectorAvailability(millis());
   strcpy(reply, reset ? "Default zero correction saved; detector must rearm"
                       : "Validated correction saved and applied; detector must rearm");
   return 0;

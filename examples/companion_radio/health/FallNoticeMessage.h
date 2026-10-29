@@ -4,6 +4,7 @@
 
 // Format an event once; the outbox retains these bytes for all local retries.
 namespace FallNoticeMessage {
+constexpr char automatic_message[] = "Possible fall; condition unconfirmed";
 struct Bundle {
   uint8_t payload[2][FallAckMessage::max_payload_bytes] = {};
   unsigned length[2] = {};
@@ -23,9 +24,9 @@ inline unsigned labelled(uint8_t* dest, const char* label, const char* text) {
   return n >= 0 && unsigned(n) < sizeof(part) ? FallAckMessage::encode(dest, 0, part) : 0;
 }
 
-// Automatic warnings append to the existing assistance+location when it fits.
-// Otherwise send the complete warning first, then assistance+location, labelled
-// [1/2] and [2/2]. Never truncate UTF-8 or change the MeshCore payload limit.
+// Automatic observations never assert that the wearer requested assistance.
+// Prefer one complete message. If it exceeds the payload limit, send the warning
+// first, then possible-fall+location, labelled [1/2] and [2/2]. Never truncate UTF-8.
 // Fall confirmation is standalone; false-alarm confirmation includes location.
 inline Bundle build(FallNotice notice, bool fix, double latitude,
                     double longitude, const char* fallback = HealthNodeConfig::DefaultLocation) {
@@ -45,7 +46,7 @@ inline Bundle build(FallNotice notice, bool fix, double latitude,
       : snprintf(location, sizeof(location), "%s", fallback);
   char base[FallAckMessage::max_text_bytes + 1], combined[FallAckMessage::max_text_bytes + 1];
   if (n < 0 || unsigned(n) >= sizeof(location) ||
-      !join(base, sizeof(base), HealthNodeConfig::ack_message, location)) return result;
+      !join(base, sizeof(base), automatic_message, location)) return result;
   if (join(combined, sizeof(combined), base, fallNoticeText(notice)))
     result.length[0] = FallAckMessage::encode(result.payload[0], 0, combined);
   if (result.length[0]) { result.count = 1; return result; }

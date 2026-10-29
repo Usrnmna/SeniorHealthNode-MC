@@ -5,6 +5,7 @@
 // Post-fall evidence only; independent of MotionRule's detection and cooldown.
 // No allocations or hardware calls. Pass only fresh samples, or invalidate().
 class ResidualMovement {
+  friend struct MotionCaptureCheckpoint;
 public:
   void reset() { have_sample = quiet_tracking = false; }
   void invalidate() { reset(); }

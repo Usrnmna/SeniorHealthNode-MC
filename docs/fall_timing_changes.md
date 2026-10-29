@@ -2,8 +2,11 @@
 
 The `heltec_v4_companion_radio_ble` firmware combines BLE and health monitoring.
 Environmental collection runs in the background; OLED and battery acquisition
-are serviced in small steps. Fall thresholds, confirmation time, two-second
-quiet rearm, and 60-second cooldown are preserved.
+are serviced in small steps. This guide retains the scheduling implementation
+map. The [maintained detector reference](fall_detection.md) defines subsequent
+FIFO acquisition, revised evidence paths, fresh-data recovery, short refractory
+suppression and incident persistence; the earlier quiet-rearm and 60-second
+classifier cooldown policy is superseded.
 
 ## 1. Environmental conversions and telemetry requests
 
@@ -40,11 +43,12 @@ bytes; the collector has a configured 6,144-byte task stack, plus RTOS overhead.
 
 [`MPU6050.h`](../src/helpers/sensors/MPU6050.h), `poll()`:
 
-- Read INT_STATUS and the 14 measurement bytes in one 15-byte burst. Accept
-  only a complete burst with DATA_RDY_INT set; a clear flag cannot advance
-  fall or residual-movement evidence. INT remains unconnected.
+- Read complete 14-byte records from hardware FIFO in bursts of at most two.
+  Preserve chronological estimated timestamps and explicitly invalidate overflow,
+  partial-read or timing-loss evidence. INT remains unconnected. See
+  [FIFO timing and bounds](fall_detection.md#acquisition-and-sample-timing).
 - Verify relevant writable bits after each initialization register write,
-  including data-ready enable and its clear-on-status-read policy. A mismatch
+  including FIFO source/control, data-ready and overflow status settings. A mismatch
   prevents readiness and uses the failed-initialization backoff.
 - Invalidate a failed/partial reading immediately. One second without new data
   also invalidates the cache and begins counting read failures, even if I2C works.
@@ -58,15 +62,17 @@ bytes; the collector has a configured 6,144-byte task stack, plus RTOS overhead.
   use a 5 ms timeout; conversion waits do not own the bus.
 
 A brief read fault uses the short retry interval; failed initialization uses the five-second backoff.
-Invalid data still clears detector evidence and requires quiet rearming.
+Invalid data clears associated evidence and requires bounded fresh-data recovery,
+not physical stillness. Candidate expiration alone does not require recovery.
 
 ## 3. Analysis independent of notifications
 
 [`HealthMonitor.cpp`](../examples/companion_radio/HealthMonitor.cpp), `MyMesh::pollMotion()`, gates
 analysis on sample validity/freshness rather than alarm or message state. It
 services motion at loop entry and again after radio work. An outstanding
-channel alert is retained, and new detections log that their notification was
-coalesced. The [message delivery guide](message_delivery_changes.md) describes
+channel alert retains retry ownership. Repeated detections within its unresolved
+incident coalesce; one waiting newest incident is retained separately and
+coalescing is exposed by `health detail`. The [message delivery guide](message_delivery_changes.md) describes
 current channel retries, repeater-echo confirmation, and serial health diagnostics.
 
 [`FallResponse.h`](../examples/companion_radio/health/FallResponse.h), `onFall()`, reports
@@ -76,7 +82,8 @@ afterward. `FallButtonGesture` also recognizes two complete presses within one
 second, then waits for the three-second window to close so a valid third press
 wins. False-alarm acceptance stops SOS and queues the exact text plus location;
 a held/late third press leaves SOS active. `updateDeadline()` selects one automatic warning at 30 seconds using
-independent residual-movement evidence. Neither duplicate detections nor partial
+independent residual-movement evidence, with at most one later fresh-quiet
+upgrade. Neither duplicate detections nor partial
 clicks extend that deadline. `FallNoticeOutbox` retains accepted messages and gives
 fall/false-alarm confirmation priority over the same incident's automatic-warning retries.
 False-alarm acceptance additionally cancels that incident's initial-alert retries.
@@ -128,7 +135,7 @@ OLED chunk size, ADC settling time and sample count, fresh-data timeout and
 battery-calibration limits, with configuration guards.
 
 [`test_sensor_timing.cpp`](../test/test_sensor_timing/test_sensor_timing.cpp)
-covers MPU data-ready gating, configuration readback, transient/persistent
+covers MPU FIFO freshness, configuration readback, transient/persistent
 failures, rollover, AHT timeout/short reads,
 cache expiry/invalidation, byte-preserving replay and capacity, staged ADC
 averaging, detection during SOS, acknowledgment retry coalescing, and OLED chunk
@@ -152,6 +159,8 @@ Measure sample spacing and invalid/gap events with actual environmental sensors,
 OLED on/off, telemetry traffic and transient I2C faults. Verify alarm/button
 behavior during pending sends, voltage accuracy, and collector stack headroom.
 Motion remains cooperative with radio, serial, flash and GPS work; these changes
-do not guarantee a hard 20 ms deadline. FIFO/interrupt sampling is not implemented.
+do not guarantee a hard 20 ms deadline. Hardware FIFO capture now preserves bounded backlogs; host interrupt timestamps
+are not implemented. FIFO overflow, excessive backlog and uncertain timing still
+break evidence rather than fabricating sample continuity.
 Radio CAD and airtime limits can delay queued messages; queue deadlines and retries
 are described in the [delivery guide](message_delivery_changes.md).

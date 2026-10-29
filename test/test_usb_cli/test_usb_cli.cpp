@@ -6,6 +6,7 @@
 #include <limits>
 #define ESP32
 #include <helpers/sensors/MPU6050.h>
+#include <MpuFifoFake.h>
 #include "../../examples/companion_radio/CompanionSettings.h"
 #include "../../examples/companion_radio/PreferenceStore.h"
 #include "../../examples/companion_radio/UsbReply.h"
@@ -168,7 +169,8 @@ TEST(MotionStatistics, CollectionAndResetDoNotChangeDetectorDecisions) {
     s.observe(now, v, v, true, true, 100);
     if (now % 200 == 0) s.reset(now, "test");
   }
-  EXPECT_EQ(1u, falls.size()); EXPECT_TRUE(monitored.cooldownActive());
+  EXPECT_EQ(1u, falls.size()); EXPECT_FALSE(monitored.cooldownActive());
+  EXPECT_TRUE(monitored.available());
 }
 struct SerialSink {
   int capacity = 0; size_t largest = 0, calls = 0; std::string bytes;
@@ -245,18 +247,17 @@ TEST(PreferenceStore, RecoveryThenSuccessfulSaveReplacesInterruptedTransaction) 
   EXPECT_FALSE(fs.exists("/prefs.bak")); EXPECT_FALSE(fs.exists("/prefs.tmp"));
 }
 TEST(SensorDiagnostics, ResetDoesNotClearFaultOrAlterRecoverySchedule) {
-  Wire1 = TwoWire{};
-  Wire1.response = [](uint8_t reg, uint8_t count) {
-    if (reg == 0x75) return std::vector<uint8_t>{0x68};
-    if (count == 1) return std::vector<uint8_t>{Wire1.registers[reg]};
-    std::vector<uint8_t> bytes(count); bytes[0] = 1; return bytes;
-  };
-  MPU6050Sensor sensor; sensor.poll(0); ASSERT_TRUE(sensor.poll(100));
-  Wire1.read_status = 1; EXPECT_FALSE(sensor.poll(120));
+  MpuFifoFake hardware;
+  MPU6050Sensor sensor; sensor.poll(0); EXPECT_FALSE(sensor.poll(100));
+  hardware.push(); ASSERT_TRUE(sensor.poll(120));
+  Wire1.read_status = 1; EXPECT_FALSE(sensor.poll(140));
   EXPECT_EQ(1u, sensor.diagnostics().bus_errors); EXPECT_FALSE(sensor.valid);
+  const auto generation = sensor.discontinuityGeneration();
   sensor.resetDiagnostics(); EXPECT_FALSE(sensor.valid);
+  EXPECT_EQ(generation, sensor.discontinuityGeneration());
   EXPECT_EQ(0u, sensor.diagnostics().bus_errors);
-  Wire1.read_status = 0; EXPECT_FALSE(sensor.poll(139)); EXPECT_TRUE(sensor.poll(140));
+  Wire1.read_status = 0; EXPECT_FALSE(sensor.poll(159)); EXPECT_FALSE(sensor.poll(160));
+  hardware.push(); EXPECT_TRUE(sensor.poll(180));
   EXPECT_EQ(1u, sensor.diagnostics().recoveries);
 }
 TEST(SensorDiagnostics, ShortReadAndFailedInitializationAreCounted) {

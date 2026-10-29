@@ -191,20 +191,24 @@ redistributes acceleration among the axes; rotation changes the gyroscope
 readings. Stationary gyroscope values should be near zero, with sensor bias
 and noise. Chip temperature is not body temperature.
 
-| `health` field | Interpretation |
+| Field | Interpretation |
 | --- | --- |
-| `motion=monitoring` | No prolonged fresh-data outage is latched. This does not identify the detector's armed state or establish successful fall detection. |
-| `motion=FAULT` | No fresh valid motion data for five seconds; clears when a fresh valid reading arrives. |
-| `motion=CALIBRATING` | Automatic fall detection is paused during calibration countdown, measurement or validation; sensor-health tracking continues. |
-| `max_gap_ms` | Longest completed interval between fresh valid samples since startup. An ongoing outage contributes only after another fresh reading arrives. |
-| `gaps` | Number of completed fresh-sample intervals exceeding 100 ms. Rising counts indicate interrupted sampling. |
-| `fall` | Delivery state of the initial possible-fall message. |
-| `help` | Delivery state of the current response-message part. |
-| `part_failed` | `1` records a failed part until the next response event; a later part succeeding does not erase it. |
+| `sensor=valid` / `unavailable` / `FAULT` | Cache validity and prolonged absence of fresh data; a fault is latched after five seconds. |
+| `detector` | `armed`, `candidate`, `recovering`, `refractory`, `calibrating`, `stale`, `sensor-unavailable` or `config-fault`. Sensor validity alone does not imply armed detection. |
+| `age_ms` | Age of the latest estimated acquisition timestamp; inspect detailed validity before interpreting unavailable data. |
+| `gaps` | Startup count of main-loop fresh-data observation intervals exceeding 100 ms. |
+| `fall` / `help` | Delivery states of the initial alert and current response-message part. |
+| `health detail`: `part_failed` | Retains a failed part until the next event; later successful parts do not erase it. |
+| `health timing` | Estimated FIFO sample intervals/coverage, backlog, discarded-record lower bound and phase uncertainty. |
+| `health errors` | Bus/configuration, FIFO overflow/reset, timing loss, saturation and temperature/calibration diagnostics. |
 
-`max_gap_ms=0; gaps=0` does not prove healthy operation: no interval can be
-measured before two fresh samples have arrived. During a persistent startup
-fault, both counters can remain zero while `motion=FAULT` is reported.
+Zero gap counters do not prove healthy operation: no interval exists before two
+fresh observations, and an ongoing outage has not yet completed an interval.
+Inspect sample age, availability and errors together. `motion trace`,
+`motion events` and `motion evidence` provide bounded RAM decision captures,
+transition summaries and preserved candidate checkpoints; they do not stream all
+samples or persist an event archive. See the
+[USB field and quality-bit reference](usb_cli_reference.md#health-and-motion-inspection).
 
 Delivery states distinguish pending work, queue acceptance, local transmission,
 repeater echo and terminal failure. Neither queue acceptance, local TX nor a
@@ -214,19 +218,21 @@ receiving companion is required for an end-to-end reception check. See the
 
 ## MPU6050 messages and isolation checks
 
-| Serial message | Meaning in the current driver |
-| --- | --- |
-| `MPU6050 ready at 0x68` | Identity and configuration readback passed. Fresh sample acquisition has not yet been established by this message alone. |
-| `MPU6050 unavailable; retry in 5s` | Initialization failed: I2C access, identity validation or configuration write/readback did not pass. Retries occur every five seconds. |
-| `MPU6050 read/data-ready failures; reinitializing` | Repeated sample failures after initialization. Causes include failed/incomplete reads or missing data-ready status after the one-second freshness timeout. The message does not distinguish these causes. |
-| `Motion FAULT: no fresh valid samples; detection unavailable` | The five-second fresh-data outage threshold was reached. |
-| `Motion recovered: fresh samples; detector must rearm` | Fresh data resumed; the detector still requires its normal settling/rearm conditions. |
+Sensor readiness and errors are queried rather than printed on every acquisition
+transition. Use `health detail`, `health timing` and `health errors`:
 
-An initialization-success message followed by reinitialization about one second
-later is consistent with the data-ready timeout, but does not conclusively
-exclude transaction errors. Sensor reinitialization messages alone do not
-establish a complete ESP32 reboot. A full boot sequence or reset/panic output is
-needed to investigate device restarts.
+| Diagnostic | Meaning |
+| --- | --- |
+| `initialized=1`, `valid=0` | Configuration may be ready while settling, awaiting FIFO output or recovering; initialization alone does not establish fresh data. |
+| `init_failures`, `identity_mismatches`, `config_mismatches` | Initialization/readback failed; failed initialization backs off five seconds. |
+| `bus_errors`, `short_reads`, `data_timeouts`, `reinitializations` | Transfer errors, incomplete records or absent FIFO output caused recovery; repeated failures trigger reinitialization. |
+| `fifo_overflows`, `time_discontinuities`, `discarded_lower_bound` | Capture continuity was lost; old event fragments cannot be joined across it. |
+| `sensor=FAULT` | The five-second fresh-data outage threshold was reached. |
+| `detector=recovering` | Fresh contiguous data must meet the bounded recovery requirement before detection resumes; physical stillness is not required. |
+
+Sensor reinitialization is distinct from a complete ESP32 restart. Capture the
+full boot/reset or panic output, uptime and diagnostic counters to investigate
+whole-device resets. A timeout counter alone cannot exclude transaction faults.
 
 For persistent faults:
 
@@ -328,14 +334,16 @@ several consecutive cycles rather than a single error line.
 | Port busy or Windows access denied | Close other monitors, flashing tools and applications holding the same port; enumerate again after reconnection. |
 | Linux permission denied | Device ownership, serial-device group membership and applicable udev rules. |
 | Typed command gives no reply | Correct USB port, running application firmware, command spelling and CR/LF termination. Typed local echo is not evidence of a device reply. |
-| No unsolicited output | Send `health`; an idle device need not continuously print data. To capture startup, open the monitor before a deliberate board reset, then reconnect if the USB port changes. Reset clears volatile alarm state. |
+| No unsolicited output | Send `health`; an idle device need not continuously print data. To capture startup, open the monitor before a deliberate board reset, then reconnect if the USB port changes. Reset may restore a saved unresolved alarm under the bounded [restart policy](fall_detection.md#post-fall-assessment-and-restart-recovery). |
 | Corrupted or binary-looking output | Confirm 115200/8N1 and that the loaded firmware exposes this text interface. Close competing protocol clients. |
 | Repeated boot or panic output | Capture the full reset sequence and distinguish whole-device restarts from the sensor-only reinitialization messages above. |
 
 `motion`, `health` and `battery` are snapshots, not continuous stream commands.
-Automatic fault/recovery and fall-delivery events are printed separately. There
+Fall-delivery transitions are printed separately; sensor fault/recovery state is
+available in diagnostics. There
 is no USB command that exposes every internal 50 Hz sample or the detector's
-complete internal state. If external polling is introduced, a modest initial
+complete internal state. Bounded trace/event/evidence snapshots expose recent
+decisions, not an uninterrupted acquisition stream. If external polling is introduced, a modest initial
 rate such as 2-5 motion queries per second limits diagnostic traffic; this is
 a suggested observation rate, not a tested timing guarantee. Host reception
 timestamps cannot establish sensor sample timing.

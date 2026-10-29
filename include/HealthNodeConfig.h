@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 // Compiled settings; changes require rebuilding heltec_v4_companion_radio_ble.
-// Alarm state is volatile and is not saved to flash.
+// Minimal unresolved incident metadata is saved on transitions; samples stay in RAM.
 // Channel selection can override the defaults below via USB/BLE: set fall.channel.
 namespace HealthNodeConfig {
 // DIYables passive buzzer module with onboard driver; supply: 3.3 V DC.
@@ -39,7 +39,7 @@ constexpr uint32_t motion_sample_ms = 20;
 constexpr uint8_t motion_fast_failures = 3; // Consecutive failed reads before reinitialization.
 constexpr uint32_t motion_retry_ms = 20;
 constexpr uint32_t motion_missing_retry_ms = 5000;
-constexpr uint32_t motion_data_timeout_ms = 1000; // Bus works but no new sensor output.
+constexpr uint32_t motion_data_timeout_ms = 1000; // Bus works but no new FIFO output.
 
 // Stationary gyroscope calibration. Any fixed orientation is valid; gravity is retained.
 // Quality limits are initial engineering values requiring actual-board validation.

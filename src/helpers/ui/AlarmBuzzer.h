@@ -13,6 +13,8 @@ public:
 
   // Reports compiled output selection, not electrical detection of a connected module.
   bool isEnabled() const { return enabled; }
+  // Commanded PWM state, not a measurement of physical vibration or sound.
+  bool sounding() const { return ready && attached; }
 
   // Establish the driver's inactive level before enabling GPIO output. PWM is
   // connected only during a tone, matching tone/noTone operation without delays.

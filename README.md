@@ -23,8 +23,10 @@ those messages without cellular service or an internet connection.
 
 > [!IMPORTANT]
 > This is a prototype. Fall-detection accuracy and emergency delivery have not
-> been validated. Ordinary activity can trigger an alert, and falls can go
-> undetected. It is not a validated medical device or guaranteed emergency
+> been validated. Experimental orientation/context paths are enabled,
+> but soft falls can still be missed and activity or device drops can trigger
+> alerts. [Detection limits and validation needs](docs/fall_detection.md) are
+> documented separately. It is not a validated medical device or guaranteed emergency
 > service. An established emergency plan remains necessary.
 
 ## Project highlights
@@ -34,7 +36,7 @@ those messages without cellular service or an internet connection.
 | **Local monitoring** | Movement monitoring and alarm handling continue when the phone is disconnected. |
 | **Mesh alerts** | Compatible radios receive group-channel messages over the available radio path. Repeaters can extend coverage. |
 | **Wearer responses** | After an alarm, PRG button gestures request assistance, confirm a fall, or report a false alarm. |
-| **Automatic escalation** | An unanswered alarm sends a warning after 30 seconds; qualifying quiet during the final 10 seconds selects a stronger no-movement warning. |
+| **Automatic assessment** | An unanswered alarm sends a warning after 30 seconds; fresh quiet can select a no-movement warning at that deadline or one later update. |
 | **Public or private channels** | The fall-message destination can be changed over USB or a compatible BLE client's local CLI. |
 | **Optional sound** | An external passive buzzer provides repeating SOS and low-battery reminders; monitoring and messages also operate without it. |
 | **MeshCore companion** | One node provides phone messaging, configuration, and local fall monitoring together. |
@@ -87,10 +89,10 @@ pending false-alarm gesture and leaves SOS active. An accepted false-alarm respo
 cancels that incident's queued automatic warnings and initial-alert retries;
 messages already transmitted cannot be recalled. Retries may produce duplicates.
 See [alarm operation](docs/operation.md) for complete timings, message examples,
-battery reminders, and reboot behavior.
+battery reminders, and bounded unresolved-alarm recovery after reboot.
 
 Idle PRG presses do not request help. The current version has no independent
-panic button, general inactivity alert, caregiver dashboard or event history,
+panic button, general inactivity alert, caregiver dashboard or permanent event archive,
 or automatic call to emergency services.
 
 ## Getting started
@@ -125,8 +127,8 @@ is available as a maintenance procedure; detection pauses during collection.
 | Calibrate the stationary gyroscope | [Calibration procedure](docs/gyro_calibration.md) |
 | Check wiring and component specifications | [Pin reference](docs/pin_schematic.md), [sensor and buzzer guide](docs/gy521_sensor.md), [buzzer module](docs/buzzer_module_reference.md), [MPU6050/GY-521](docs/mpu6050_gy521_reference.md), [Heltec V4](docs/heltec_v4_spec_reference.md) |
 | Examine detection rules, tuning and research | [Detector and research](docs/fall_detection.md) |
-| Understand message retries and delivery evidence | [Response and delivery](docs/message_delivery_changes.md) |
-| Inspect source organization and scheduling | [Firmware architecture](docs/architecture.md), [timing](docs/fall_timing_changes.md) |
+| Understand message retries and delivery evidence | [Incident and notification behavior](docs/fall_detection.md#detection-and-notification-ownership), [delivery reference](docs/message_delivery_changes.md) |
+| Inspect source organization and scheduling | [Firmware architecture](docs/architecture.md), [buffered acquisition](docs/fall_detection.md#acquisition-and-sample-timing) |
 | Build and evaluate the software | [Build and validation](docs/build-validation.md), [virtual fault testing](docs/virtual-fault-testing.md) |
 | Integrate a client | [Companion protocol](docs/companion_protocol.md) |
 

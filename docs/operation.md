@@ -9,9 +9,9 @@ is documented below.
 
 ## Alarm and response behavior
 
-A detected fall also latches an external passive buzzer into an SOS loop, with five seconds of silence between sequences. While SOS is active, PRG is reserved for alarm acknowledgement. Three short PRG clicks within three seconds silence it and queue a configurable Unicode acknowledgement to a MeshCore channel, appending the GPS provider's valid coordinates or `DefaultLocation` (`HOME`). Reboot clears the alarm and detector state. The companion retains its low-voltage automatic shutdown below 3400 mV when external power is not detected; shutdown stops monitoring and sound. Buzzer GPIO47, sound/button timings, channel defaults and message are grouped in [`HealthNodeConfig.h`](../include/HealthNodeConfig.h). See the [buzzer wiring and function guide](gy521_sensor.md#passive-buzzer-wiring-and-shared-functions).
+A possible fall also latches an external passive buzzer into an SOS loop, with five seconds of silence between sequences. While SOS is active, PRG is reserved for alarm acknowledgement. Three short PRG clicks within three seconds silence it and queue a configurable Unicode acknowledgement to a MeshCore channel, appending the GPS provider's valid coordinates or `DefaultLocation` (`HOME`). A checked unresolved incident can restore SOS after reboot under the bounded recovery policy described below; motion evidence and partial gestures restart empty. The companion retains its low-voltage automatic shutdown below 3400 mV when external power is not detected; shutdown stops monitoring and sound. Buzzer GPIO47, sound/button timings, channel defaults and message are grouped in [`HealthNodeConfig.h`](../include/HealthNodeConfig.h). See the [buzzer wiring and function guide](gy521_sensor.md#passive-buzzer-wiring-and-shared-functions).
 
-If neither response has been accepted after **30 seconds**, the node automatically sends the assistance text and location with ` | USER COULD NOT CONFIRM THEIR CONDITION` appended. If fresh motion samples establish quiet for the **final 10 continuous seconds**, it instead appends ` | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER`. The quiet duration and movement thresholds are adjustable. Missing or invalid samples cannot establish quiet. SOS keeps repeating through either warning and through delivery failures. Three presses afterward stop SOS and send the independent text `USER HAS CONFIRMED FALL`. False-alarm double presses remain available after either warning. A warning that exceeds the channel's text limit uses two labelled messages; standalone warning text has no leading ` | `. See the [response and delivery guide](message_delivery_changes.md#post-fall-response-directives).
+If neither response has been accepted after **30 seconds**, the node automatically sends `Possible fall; condition unconfirmed` and location with ` | USER COULD NOT CONFIRM THEIR CONDITION` appended. If fresh motion samples establish quiet for the **final 10 continuous seconds**, it instead appends ` | NO RESIDUAL MOVEMENTS DETECTED; POSSIBLE INCAPACITATION OF USER`. The quiet duration and movement thresholds are adjustable. Missing or invalid samples cannot establish quiet. After an initial unconfirmed-condition warning is accepted by the outbox, later fresh quiet can produce one no-residual-movement update. The original deadline does not move. SOS keeps repeating through either warning and through delivery failures. Three presses afterward stop SOS and send the independent text `USER HAS CONFIRMED FALL`. False-alarm double presses remain available after either warning. A warning that exceeds the channel's text limit uses two labelled messages; standalone warning text has no leading ` | `. See the [assessment and restart reference](fall_detection.md#post-fall-assessment-and-restart-recovery).
 
 For a false alarm, press and release PRG **twice within one second**, measured from first press-down to second release. SOS continues until the **three-second window from the first press closes**. A valid third press within that window takes priority as fall confirmation/assistance. Otherwise, the accepted double press stops SOS and queues `User Confirms False Alarm | <location>`, cancelling that incident's queued automatic warnings and initial-alert retries. A started third press that is held too long or released late cancels the double candidate and leaves SOS active. Already transmitted messages cannot be recalled.
 
@@ -75,14 +75,14 @@ See [polarity settings and wiring](gy521_sensor.md#buzzer-trigger-polarity).
 | Ordinary beep | `beep` command or `alarm_buzzer.beep()`; 150 ms at 2000 Hz. Returns unavailable while an alarm sequence is playing. |
 | Fall SOS | Three short, three long, three short tones at 2000 Hz; 150 ms dots, 450 ms dashes and five seconds of silence between sequences. |
 | Acknowledge fall | Three debounced PRG clicks within three seconds, each shorter than one second; silences SOS. Before automatic escalation, sends the assistance request; afterward, sends `USER HAS CONFIRMED FALL`. Idle clicks do not request help. |
-| Unanswered fall | At 30 seconds, send assistance+location with the unconfirmed-condition warning, or the no-residual-movement warning if the final 10 seconds qualify as quiet. SOS has no elapsed-time cutoff. |
+| Unanswered fall | At 30 seconds, send possible-fall context and location with the unconfirmed-condition warning, or the no-residual-movement warning if the final 10 seconds qualify as quiet. One later quiet update is possible. Automatic text does not assert a wearer request for help. SOS has no elapsed-time cutoff. |
 | False alarm | Two complete presses within one second; wait until the three-second window closes. A valid triple press wins. Stops SOS and sends `User Confirms False Alarm` with GPS or fallback location, before or after escalation. |
 | Channel text | Default `#falldetect`. Assistance and false-alarm responses include location; automatic warnings append their exact text or use two labelled parts when necessary. Late confirmation is standalone. Separators are inserted only between joined text. |
 | Delivery retries | Allocation/local TX failures retry after five seconds, with 60 total attempts and a 30-second queue deadline. After local TX, wait 15 seconds for a repeat; allow at most four successful local sends without one. Retries can display duplicate text. See the [delivery guide](message_delivery_changes.md). |
 | Low battery | Below 3500 mV: 2093 Hz, 1760 Hz, then 1480 Hz; each tone lasts 450 ms with 150 ms gaps. Repeats every ten minutes from accepted sequence starts. |
 | Battery recovery | Above 3500 mV clears the warning; exactly 3500 mV preserves its state. Battery sampling runs once per second; a zero reading is treated as unavailable. |
 | Alarm priority | SOS preempts a battery sequence. A due battery reminder waits while the buzzer is busy. |
-| Reboot | Clears volatile alarm, acknowledgement and reminder state; low battery is evaluated again after startup. |
+| Reboot | May restore a checked unresolved alarm and its original channel. Fresh samples and a new gesture are required; delivery retry progress, traces and reminder state are not restored. See the recovery policy below. |
 
 > [!IMPORTANT]
 > **Connecting a charger does not immediately silence the battery warning on the current hardware.** Charging sensing defaults to disabled (`charging_status_pin = -1`). With no charging-status GPIO connection, the warning clears only when measured battery voltage exceeds 3500 mV. An added, conditioned 3.3 V active-charging signal can cancel the battery warning before voltage recovers; it never cancels SOS. See the [charging input requirements](gy521_sensor.md#low-battery-buzzer-reminder).
@@ -90,3 +90,31 @@ See [polarity settings and wiring](gy521_sensor.md#buzzer-trigger-polarity).
 Set the fall-message channel at runtime with `get fall.channel`, `set fall.channel public #name`, or `set fall.channel private Name <shared-key>`. For MeshCore One v1.5.1, use **Tools → CLI → local session** over BLE; the same commands work over USB serial at 115200 baud. Settings survive reboot and apply to new incidents; active incidents and queued messages retain their original channel. See the [channel command guide](cli_commands.md#fall-message-channel-usb-and-ble).
 
 Edit [`include/HealthNodeConfig.h`](../include/HealthNodeConfig.h) for buzzer, battery, button and compiled channel defaults. Edit `FallDetectionConfig` in [`MotionRule.h`](../examples/companion_radio/health/MotionRule.h) for motion thresholds and timing. Those source changes require a firmware rebuild; channel commands do not.
+
+## Unresolved incidents and restart
+
+New detector events continue during notification retries. Repeated detections
+within one unresolved incident preserve its original deadline, PRG progress and
+retry ownership. After acknowledgement or false-alarm dismissal, a new event
+can start a local alarm after the detector's short 1200 ms refractory period.
+The initial-alert stream retains one active message and one waiting latest
+incident; `health detail` exposes coalescing when delivery is outpaced. If all
+bounded confirmation capacity is occupied, resolving a newer incident still
+stops its local alarm, but an earlier pending confirmation keeps ownership and
+the newer transmission can be omitted. `dropped_confirmations` exposes this
+remaining delivery-saturation limit; acknowledgement does not guarantee a
+transmitted or received response.
+
+Minimal incident metadata is saved on open, resolution and recovery transitions.
+The current target cannot establish elapsed power-off time from its software
+clock. Restart therefore uses the reported clock-uncertain policy: at most three
+successfully persisted recoveries, immediate unconfirmed-condition assessment,
+and no restored quiet evidence. A checked resolution prevents ordinary restart
+reactivation. Corrupt records suppress restoration and report storage uncertainty.
+A future qualified continuous clock can enable the tested 24-hour age-expiry
+policy; that expiry is not active on the current target.
+
+`health detail` reports recovery outcome and pending/failed writes. A reset before
+a write succeeds can lose the latest transition or fail to advance the recovery
+budget. Restart recovery is not a guarantee across arbitrary power loss or flash
+failure. See the [full recovery and assessment limits](fall_detection.md#post-fall-assessment-and-restart-recovery).

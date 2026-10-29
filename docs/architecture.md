@@ -2,8 +2,9 @@
 
 The [USB CLI reference](usb_cli_reference.md) documents companion `get`/`set`
 configuration, `set username`, and detailed health/motion statistics. Statistics
-use bounded RAM aggregates after fall processing; replies drain incrementally.
-No logging or streaming capability is added. Hardware timing remains subject to
+use bounded RAM aggregates after fall processing; event/decision traces use
+fixed-size RAM rings, and replies drain incrementally. No sample-rate flash
+logging or continuous streaming is performed. Hardware timing remains subject to
 bench verification.
 
 `heltec_v4_companion_radio_ble` is the only firmware target. It includes MeshCore BLE, contacts, messaging, display, GPS and environmental telemetry, plus GY-521/MPU6050 fall detection, SOS, PRG acknowledgement and low-battery reminders.
@@ -13,9 +14,9 @@ Build commands, Windows tool installation and flashing are documented in the [bu
 ## Execution and data flow
 
 ```text
-GY-521 --> fresh valid sample --> MotionRule --> possible-fall incident
+GY-521 FIFO --> ordered sample --> MotionRule --> possible-fall incident
                   |                                  |
-                  +--> motion statistics             +--> initial-alert delivery
+                  +--> motion statistics + bounded trace             +--> initial-alert delivery
                   +--> residual-movement tracking    +--> FallResponse + SOS
 
 PRG gesture + deadline + residual state --> FallResponse --> response outbox
@@ -45,9 +46,11 @@ Health monitoring runs inside the **BLE companion**. `main.cpp` services motion,
 
 | File | Responsibility |
 | --- | --- |
-| [`src/helpers/sensors/MPU6050.h`](../src/helpers/sensors/MPU6050.h) | Reads a GY-521/MPU6050 on `Wire1` at I2C address `0x68`. It verifies the device ID and configuration, accepts data-ready samples, and recovers after failed reads or stopped updates. |
+| [`src/helpers/sensors/MPU6050.h`](../src/helpers/sensors/MPU6050.h) | Reads a GY-521/MPU6050 on `Wire1` at I2C address `0x68`. It verifies identity/configuration, reads bounded FIFO batches, estimates chronological sample times, flags loss/saturation, and recovers after failed reads or stopped updates. |
 | [`src/helpers/sensors/EnvironmentSensorManager.cpp`](../src/helpers/sensors/EnvironmentSensorManager.cpp) and [`.h`](../src/helpers/sensors/EnvironmentSensorManager.h) | Make the motion sensor available to the combined firmware and add its latest valid readings to environmental telemetry. |
-| [`examples/companion_radio/health/MotionRule.h`](../examples/companion_radio/health/MotionRule.h) | Implements the low-acceleration / impact / rotation sequence, optional quiet confirmation, sampling-gap rejection, and cooldown. All settings are grouped at the top. |
+| [`examples/companion_radio/health/MotionRule.h`](../examples/companion_radio/health/MotionRule.h) | Implements the strong sequence and experimental relative-orientation paths, bounded history, fresh-data recovery, gap rejection and short event refractory period. All settings are grouped at the top. |
+| [`MotionTrace.h`](../examples/companion_radio/health/MotionTrace.h) and [`HealthDiagnostics.cpp`](../examples/companion_radio/HealthDiagnostics.cpp) | Retain bounded decision/rejection evidence, expose availability and coverage, and format query snapshots incrementally. |
+| [`FallIncidentStore.h`](../examples/companion_radio/health/FallIncidentStore.h) and [`FallInitialAlert.h`](../examples/companion_radio/health/FallInitialAlert.h) | Persist minimal unresolved-incident transitions with bounded recovery and coalesce initial notifications without resetting transport retries. |
 | [`HealthMonitor.cpp`](../examples/companion_radio/HealthMonitor.cpp) | Services motion detection, fall acknowledgement, buzzer playback and battery polling; handles the `motion`, `health`, and `beep` commands. |
 | [`examples/companion_radio/health/FallChannel.h`](../examples/companion_radio/health/FallChannel.h) and [`FallChannelStore.h`](../examples/companion_radio/health/FallChannelStore.h) | Parse public/private destinations and persist checked channel records separately from the ordinary chat channel list. |
 | [`include/HealthNodeConfig.h`](../include/HealthNodeConfig.h), [`AlarmBuzzer.h`](../src/helpers/ui/AlarmBuzzer.h), and [`BuzzerPattern.h`](../src/helpers/ui/BuzzerPattern.h) | Configure and initialize the passive buzzer; expose `alarm_buzzer.beep()`, nonblocking SOS and three-tone battery playback. |
@@ -84,8 +87,11 @@ Default limits in [`HealthNodeConfig.h`](../include/HealthNodeConfig.h) are:
 
 Receivers may display duplicate text. A matching repeater echo is rebroadcast
 evidence, not confirmation that a caregiver received or read the message. A direct
-listener may receive text even when no repeat is heard. Pending events are held
-in RAM and do not survive reboot. See the [delivery implementation and adjustment
+listener may receive text even when no repeat is heard. Delivery payloads and
+retry progress are held in RAM. Minimal unresolved-incident metadata is persisted
+separately, permitting bounded alarm recovery and a new automatic assessment
+after reboot; it does not restore the old delivery queue. See the
+[restart policy](fall_detection.md#post-fall-assessment-and-restart-recovery). See the [delivery implementation and adjustment
 guide](message_delivery_changes.md) for state transitions, late echoes,
 failure handling, and configuration details.
 
@@ -95,26 +101,33 @@ The [stationary gyroscope calibration guide](gyro_calibration.md) describes
 `calibrate`, progress, save/cancel/reset, raw readings and MeshCore local CLI use.
 Calibration accepts any fixed orientation, collects 15 seconds of stationary
 data after a countdown, and validates a new result before explicit saving.
-Automatic fall detection pauses during collection and resumes with normal rearm.
+Automatic fall detection pauses during collection and resumes after fresh-data recovery.
 Acceleration retains gravity; accelerometer calibration is not included.
 
 The [USB serial debugging guide](usb_serial_debugging.md) provides Windows
 PowerShell and Linux setup, port discovery, timestamped logging, command examples
 and troubleshooting for MPU6050, battery and buzzer behavior.
 
-At 115200 baud, enter `health` followed by carriage return to inspect:
+At 115200 baud, `health` separates `sensor` health from `detector` availability
+and reports `fall`/`help` delivery state, sample age and startup gap count.
+`health detail` adds detector phase, unavailable time, calibration, alarm state,
+persistence/recovery status, coalescing and multipart failure. `health timing`
+reports estimated sample intervals, FIFO backlog and discarded-record lower
+bounds. `health errors` includes bus faults, FIFO overflow, discontinuities,
+saturation and gyro calibration temperature delta.
 
-| Field | Meaning |
-| --- | --- |
-| `fall` / `help` | Separate states for the initial fall alert and the current response-message part: idle, pending, queued, locally transmitted, repeater echo heard, or a terminal failure/unconfirmed result. |
-| `part_failed` | `1` if a part of the current or most recently completed response event exhausted retries or failed formatting. A later part's successful delivery does not erase it; the next event resets it. |
-| `motion` | `CALIBRATING` during the explicit calibration pause; otherwise `FAULT` after 5 seconds without fresh valid motion data. A fresh valid reading clears the fault. `monitoring` does not mean the detector is armed. |
-| `max_gap_ms` / `gaps` | Longest completed interval between fresh valid samples, and count of intervals exceeding the detector's 100 ms gap limit. An ongoing outage contributes an interval when sampling resumes. |
+`motion trace` captures recent accepted/rejected decision evidence;
+`motion events` returns bounded transition summaries. Samples and traces remain
+in RAM. Each CLI service call offers at most 32 reply bytes and one optional
+31-byte recording frame to the bounded USB worker queue; input is capped at
+16 bytes per call. These bounds reduce diagnostic interference without guaranteeing a
+hard acquisition deadline. The [USB reference](usb_cli_reference.md#health-and-motion-inspection)
+defines fields, quality flags, snapshots and reset behavior.
 
-These diagnostics do not relax the detector's data guards or quiet-rearm rules.
-Serial input is capped at 16 bytes per loop pass, with no firmware character echo; command
-execution and other blocking work can still delay sampling. See the [CLI
-reference](cli_commands.md) and [`MotionHealth.h`](../examples/companion_radio/health/MotionHealth.h).
+A sensor fault after five seconds without fresh data is distinct from the
+100 ms evidence-gap guard. Fresh-data recovery, candidate tracking, short
+refractory suppression and calibration are visible availability states;
+none is hidden behind a generic monitoring label.
 
 ### Timing, wiring, and regression coverage
 
@@ -122,8 +135,11 @@ reference](cli_commands.md) and [`MotionHealth.h`](../examples/companion_radio/h
   environmental collection with cache expiry, 32-byte OLED transfer pieces, and
   staged battery ADC acquisition reduce interference with motion polling. The
   [timing report](fall_timing_changes.md) maps these changes to their source
-  files and tunables. Sampling remains cooperative; interrupt/FIFO capture is not
-  implemented.
+  files and tunables for the earlier scheduling work. Current acquisition uses
+  50 Hz hardware FIFO capture with bounded two-record bursts and at most four
+  processed samples per poll; host IRQ capture remains unused. The
+  [detector reference](fall_detection.md#acquisition-and-sample-timing) defines
+  chronological timing, explicit loss handling and remaining latency limits.
 - **Pin reference:** the [simple pin schematic](pin_schematic.md) collects
   external MPU6050/buzzer wiring, onboard display/radio/control signals, and optional
   GPS, RTC, and sensor connections. It uses ESP32 GPIO numbers and is derived from

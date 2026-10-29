@@ -14,15 +14,17 @@ stationary on a stable surface throughout measurement and validation.
 This feature corrects gyroscope offsets only. Acceleration retains gravity,
 approximately 1 g in magnitude at rest. Accelerometer offsets, accelerometer
 scale, gyroscope scale and fall-detection thresholds are unchanged. Six-position
-accelerometer calibration is not implemented.
+accelerometer calibration and temperature-dependent compensation are not
+implemented. `health errors` reports the temperature difference from the saved
+gyro calibration as a diagnostic; it does not adjust the saved coefficients.
 
 ## Preparation
 
 1. Install firmware containing the calibration commands. Editing source files
    alone does not update a device or an existing firmware binary.
 2. Verify stable MPU6050 readings with `motion` and `health`. Repeated
-   `MPU6050 unavailable` or read/data-ready failures require correction before
-   calibration; offsets cannot repair I2C, power or data-ready faults.
+   `MPU6050 unavailable` or FIFO/read failures require correction before
+   calibration; offsets cannot repair I2C, power or FIFO-output faults.
 3. Place the assembled device on a rigid, vibration-free surface. Arrange the
    USB cable to prevent movement. Hand-held or worn calibration is unsuitable.
 4. Allow the sensor temperature to stabilize under representative operating
@@ -33,15 +35,15 @@ accelerometer calibration is not implemented.
    active; normal acknowledgement and delivery behavior must complete first.
 
 Automatic fall detection is **paused during preparation, measurement and
-validation**. `health` reports `motion=CALIBRATING`. BLE, USB, radio services,
+validation**. `health` reports `detector=calibrating`. BLE, USB, radio services,
 battery acquisition and sensor-health tracking continue. Buzzer playback is
 stopped at entry, the `beep` command is rejected, and battery tones are suppressed
 until collection ends. Calibration also works without a connected buzzer.
 
 Detection resumes automatically after success, cancellation, timeout or failure,
 using the previous saved correction until a new one is saved. Partial fall
-evidence is discarded; the usual quiet rearm conditions and any existing
-cooldown remain applicable. The pending-result review period does not pause
+evidence is discarded; detection requires 200 ms and at least six fresh
+contiguous samples after the pause. Movement does not prevent this recovery. The pending-result review period does not pause
 monitoring.
 
 ## USB procedure on Windows or Linux
@@ -164,9 +166,10 @@ Physical client/BLE interoperability remains a separate bench check.
 
 ## Quality checks and failure recovery
 
-Only complete, data-ready MPU6050 readings enter calibration. Identical stationary
-values may still be fresh. Cached values are never counted again merely because
-the main loop runs. Measurement averages use readings before any existing
+Only complete, fresh FIFO samples enter calibration with estimated capture
+timestamps. Samples captured before the applicable collection phase are not
+reused in that phase. Identical stationary values may still be fresh; cached
+values are never counted again merely because the main loop runs. Measurement averages use readings before any existing
 correction, preventing repeated calibration from accumulating offsets.
 
 | Status/reason | Meaning and recovery |

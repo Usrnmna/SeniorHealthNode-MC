@@ -88,7 +88,8 @@ bool MyMesh::handleSettingsCommand(const char* command, char* reply) {
     } else if (!strcmp(topic, "health")) {
       usb_reply.append("health [detail|timing|errors|radio|stats reset]\nReset affects motion/timing/error statistics only; faults, alarms and since-startup max_gap_ms remain.\n");
     } else if (!strcmp(topic, "motion")) {
-      usb_reply.append("motion [raw|stats|stats raw|stats reset]\nStatistics: fresh samples since startup/reset; min/max/mean/sample standard deviation. No trailing-window history.\n");
+      usb_reply.append("motion [raw|stats|stats raw|stats reset|trace|evidence|events]\nTrace: recent decision; evidence: candidate checkpoints; events: accepted/rejected transitions. Stats: fresh samples since reset.\n");
+      usb_reply.append("motion record [start|stop|status]: optional RAM-only USB capture; stop and drain to complete a session\n");
     } else if (!strcmp(topic, "calibrate")) {
       usb_reply.append("calibrate [start|status|show|show saved|save|cancel|reset]\nStart pauses detection for countdown, stationary 15s measurement and validation. Save is explicit.\n");
     } else usb_reply.append("Error: unknown help topic\n");

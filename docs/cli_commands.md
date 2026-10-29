@@ -4,7 +4,8 @@ The [local USB configuration and statistics reference](usb_cli_reference.md)
 describes companion `get`/`set` settings, the `username`/`name` alias, supported
 upstream keys, and detailed `health`/`motion` statistics. Configuration setters
 share validation and persistence with the corresponding BLE protocol operations.
-Statistics use RAM aggregates; no logging or streaming commands are added.
+Statistics use RAM aggregates. Separate bounded trace/event/evidence snapshots
+retain recent decisions; there is no continuous streaming or sample-rate flash logging.
 
 The local SeniorHealthNode BLE companion supports the fall-channel commands below
 through USB serial and the companion custom-variable protocol over BLE. Gyroscope
@@ -30,8 +31,9 @@ command. These commands remain available while BLE companion services run:
 | `calibrate status` / `calibrate show` / `calibrate show saved` | Inspect progress, pending coefficients or active saved/default coefficients. |
 | `calibrate save` / `calibrate cancel` / `calibrate reset` | Save validated offsets, cancel/discard an attempt, or save zero correction. |
 | `get calibrate` / `set calibrate <action>` | Shared USB/BLE status and control; actions are `start`, `save`, `cancel` and `reset`. |
-| `health` | `fall` and `help` delivery states, `motion` availability, `max_gap_ms`, `gaps` and `part_failed`. |
+| `health` | `fall` and `help` delivery states, separate `sensor`/`detector` availability, sample age and startup gap count. |
 | `health detail`, `health timing`, `health errors`, `health radio` | Detailed sensor/detector, fresh-sample timing, error/recovery and radio diagnostics. |
+| `motion trace`, `motion events`, `motion evidence` | Bounded RAM decision/rejection samples, transition summaries and retained candidate checkpoints; no continuous streaming. |
 | `motion stats`, `motion stats raw` | Fresh-sample counts and min/max/mean/sample standard deviation for axes, magnitudes and chip temperature. |
 | `motion stats reset`, `health stats reset` | Reset RAM aggregates; the health reset also clears sensor diagnostic counters. Neither clears alarms, faults, detector state, calibration or startup gap counters. |
 | `get username`, `set username <name>` | Inspect or set the advertised name used in ordinary companion messages; alias of `get/set name`. Fall messages remain nameless group texts. |
@@ -49,20 +51,23 @@ The `beep` output uses 50% PWM on GPIO47 and returns to LOW idle by default.
 USB/BLE `get`/`set` keys. See the [passive-module wiring and polarity
 guide](gy521_sensor.md#buzzer-trigger-polarity) before changing either setting.
 
-`help` is the current response-message part. `part_failed=1` preserves a failed
-part until the next response event. `motion=monitoring` means no prolonged data
-outage is latched; it does not mean the detector is armed or no fall occurred.
-A fresh-data outage of five seconds produces `motion=FAULT`. Gap counters track
-completed intervals between fresh valid samples, including an outage once data
-resumes. See the [delivery guide](message_delivery_changes.md).
-`motion=CALIBRATING` identifies the explicit maintenance pause; fresh-data health
-tracking continues during that pause. Detection resumes with normal rearm after
-success, cancellation or failure. `beep` is unavailable during calibration.
+`help` is the current response-message part. `health detail` exposes
+`part_failed=1` until the next response event, together with persistence, recovery
+and coalescing state. `sensor=FAULT` indicates a five-second absence of fresh data;
+a valid cache alone does not establish detection availability. `detector`
+separates calibration, recovery, armed/candidate, stale/unavailable, refractory
+and configuration-fault states. Gap counters track completed main-loop
+fresh-data observations; FIFO capture timing and lost-record diagnostics are
+reported separately. See the [diagnostics reference](usb_cli_reference.md#health-and-motion-inspection).
+
+Detection pauses during calibration and resumes after bounded fresh-data
+recovery; `beep` is unavailable during collection. A pending result does not pause
+detection. Missing sensor data is never treated as quiet.
 
 USB command input is bounded per loop and the firmware does not echo characters.
 A serial terminal can still enable its own local echo or logging. Overlong lines
 and lines containing NUL are discarded rather than executed as a truncated command.
-`fall.channel` and `calibrate` are BLE custom variables. Detailed coefficient
+`fall.channel`, read-only `motion.state` and `calibrate` are BLE custom variables. Detailed coefficient
 reports, `motion raw`, and the other diagnostics remain USB commands.
 
 ## Stationary gyroscope calibration
@@ -1214,7 +1219,8 @@ region save
 
 Available in `heltec_v4_companion_radio_ble` with MPU6050 support. Over serial, use 115200 baud
 and terminate the command with carriage return. The reply contains `fall`, `help`,
-`motion`, `max_gap_ms`, `gaps`, and `part_failed`.
+`sensor`, `detector`, `age_ms` and `gaps`. `health detail` adds `part_failed`,
+startup maximum gap, recovery and persistence diagnostics.
 
 `fall` and `help` report the independent initial-fall and current response-message
 part. Responses include assistance, automatic warnings, late fall confirmation and
@@ -1223,8 +1229,8 @@ part. Responses include assistance, automatic warnings, late fall confirmation a
 response event, even if a later part succeeds; the next event resets it.
 States distinguish queueing, local transmission, repeater echo evidence,
 and exhausted/unconfirmed delivery. A repeater echo is not a recipient receipt.
-`motion=FAULT` means fresh valid samples have been absent for the configured
-timeout; `monitoring` is not a guarantee that the detector is armed. Gap statistics
+`sensor=FAULT` means fresh valid samples have been absent for the configured
+timeout; `detector` reports availability independently. Gap statistics
 describe completed intervals between fresh valid samples and reset on reboot.
 This command does not change settings, send a fall message, or alter the OLED.
 

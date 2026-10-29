@@ -61,17 +61,17 @@ BLE companion or prove hardware calibration accuracy. See the
 
 | Scenario family | Inputs / example | Required result |
 | --- | --- | --- |
-| Truncated MPU sample (15 cases) | Return each length 0 through 14 instead of 15 bytes midway through confirmation | Invalidate sample, cancel old evidence, detect a fresh fall after recovery |
-| MPU data-ready status | Clear flag, unrelated status bit, identical axes with a fresh flag, and prolonged missing data across clock wrap | Only fresh data reaches the detector; a stuck sensor invalidates and reinitializes |
-| MPU configuration readback | Mismatch each of eight registers; fail a read; change reserved bits | Reject mismatched relevant bits and bus failures; ignore reserved bits; recover after retry |
+| Truncated MPU sample (14 cases) | Return each length 0 through 13 instead of a 14-byte FIFO record during an incomplete candidate | Invalidate sample, cancel old evidence, detect a fresh fall after recovery |
+| MPU FIFO freshness | Empty FIFO, identical complete records and prolonged missing output across clock wrap | Only complete FIFO records advance evidence; a stuck sensor invalidates and reinitializes |
+| MPU configuration readback | Mismatch each of ten registers; fail a read; change reserved bits | Reject mismatched relevant bits and bus failures; ignore reserved bits; recover after retry |
 | Battery calibration | Meter input, stale/zero/saturated ADC data, invalid multipliers, old and new preference files | Preserve conversion arithmetic; reject invalid suggestions; round-trip the saved multiplier; absent setting selects default |
-| Cooperative loop stalls (5 cases) | Wait 101 ms, 250 ms, 1 s, 5 s, or 60 s between low acceleration and impact | Do not join evidence across missing time; recover after quiet settling |
-| Disconnection at three stages | Unplug while armed, after low acceleration, or during confirmation; remain missing through reinitialization | No stale fall; reconnect, settle, then detect a new sequence |
+| Cooperative loop stalls (5 cases) | Wait 101 ms, 250 ms, 1 s, 5 s, or 60 s between low acceleration and impact | Do not join evidence across missing time; recover after contiguous fresh samples |
+| Disconnection at three stages | Unplug while armed, after low acceleration, or after impact in an incomplete sequence; remain missing through reinitialization | No stale fall; reconnect, recover with fresh samples, then detect a new sequence |
 | Device and configuration faults | Wrong WHO_AM_I; configuration write failure; alternating failed/successful samples for one minute | No usable motion until recovery; intermittent failures cannot accumulate quiet evidence |
 | HAL transaction errors (3 cases) | Inject nonzero return statuses despite a full response buffer | Reject the buffer; pass the configured 5 ms timeout to HAL; recover |
-| Oversized sample | Return 15 bytes | Reject without accepting old motion evidence |
+| Oversized sample | Return 16 bytes for a 14-byte request | Reject without accepting old motion evidence |
 | Signed sensor axes / rollover | Negative acceleration and gyro axes; clock wraps during the event | Use magnitudes correctly; detect and acknowledge once |
-| Disconnect during SOS | Disconnect after an alert; reconnect before cooldown ends | Keep SOS active; preserve cooldown; later fall detection remains enabled |
+| Disconnect during SOS | Disconnect after an alert, then reconnect | Keep SOS active; preserve the short event refractory deadline; fresh-data recovery permits later detection |
 | Noisy or held PRG button | Bounce press/release edges; hold at fall onset; stall the loop during a press | Require a valid post-fall gesture; neither bounce nor a held press silences SOS |
 | Sensor unavailable during acknowledgment | Disconnect sensor, then perform three bouncing-but-valid clicks | Local SOS stops and assistance request becomes pending |
 | Low battery versus SOS | 3300 mV while SOS is active | Defer battery playback without consuming reminder; start after acknowledgment |
@@ -79,7 +79,7 @@ BLE companion or prove hardware calibration accuracy. See the
 | Unknown ADC value / threshold | 0, 3499, 3500, and 3501 mV in sequence | Unknown is not recovery; equality preserves state; above threshold clears |
 | Allocation recovery (4 cases) | Local packet allocation succeeds on attempt 1, 2, 30, or 60, across clock wrap | Enforce retry interval, stop after success, do not restart SOS |
 | Allocation exhaustion | All 60 attempts fail while motion continues | Stop retries; a later fall and acknowledgment create a fresh request |
-| Reboot with request pending | Construct fresh production state after acknowledgment | Volatile alarm/request/battery state clears; require fresh motion evidence |
+| Fresh construction after acknowledgement | Construct a new in-memory harness after resolution, without loading incident storage | Volatile request/battery state clears; require fresh motion evidence. This case does not test firmware restart restoration. |
 | Jittered one-hour replay | Fixed seed 0x6050; 20–50 ms steps, injected missing reads and 250 ms stalls; clock rollover | No alert on the bounded ordinary-motion trace; detect a later complete fall |
 | OLED failures (32 cases) | Fail at each of the 32 frame chunks | Abort frame; next frame starts at byte zero and completes in 32 chunks |
 | ADC scheduling under a stall | 60-second loop pause; alternating raw 0/4095 readings | One conversion per call; average 2047; divider turned off on completion |
@@ -89,6 +89,53 @@ BLE companion or prove hardware calibration accuracy. See the
 
 Parameterized scenarios expand into individual GoogleTest cases. Use the test
 runner output for totals for the current checkout.
+
+## Detector evidence, FIFO and restart regressions
+
+```powershell
+python -m platformio test -e native -f test_motion_rule -f test_motion_fifo
+python -m platformio test -e native -f test_incident_recovery -f test_post_fall
+```
+
+The detector suite exercises strong sequences despite continuing movement,
+missing low-g or gyro peaks through contextual paths, supported/slow descents,
+pre-trigger rotation, expiration followed by a new candidate, brief faults during
+motion, repeated events within a minute, short refractory behavior across faults,
+invalid configuration and timer rollover. Synthetic sitting, bending, gradual
+lying and isolated bumps test specific negatives; a device drop matching the
+strong sequence deliberately remains an explicit ambiguity. These inputs are not
+a labelled human-activity dataset.
+
+The FIFO suite uses the production `MPU6050Sensor` with a register/FIFO fake.
+It covers two-record batching, sample phase/jitter, retained peaks during bounded
+host stalls, overflow before and during a burst, partial reads, trailing partial
+records, stale backlog, software-queued expiry, discontinuity recovery and axis
+saturation. Driver-to-rule tests check that loss cannot connect an old low-g
+fragment to a later peak and that complete buffered strong evidence can be
+recognized before a subsequent loss. It does not measure real oscillator timing,
+I2C transactions or ISR latency.
+
+Trace tests exercise bounded rings, raw/corrected axes, acceptance/rejection,
+retained peak/trough checkpoints during long candidates and frozen loss evidence.
+Post-fall tests include the original deadline and one later fresh-quiet update,
+without retroactively strengthening an earlier assessment or restoring old quiet.
+
+Incident tests use the production store with a filesystem fake and production
+response state. They cover alternating records, resolution tombstones, torn writes,
+corruption, unreadable records, repair/readback failure, generation rollover,
+qualified-clock expiry and clock-uncertain recovery limits. The target currently
+uses the clock-uncertain path because its software clock cannot prove elapsed
+downtime; plausible saved timestamps do not qualify that clock. Recovery-count
+advancement depends on a successful write. Response restoration tests start with
+fresh motion/gesture evidence, retain the original destination and deadline where
+age is known, and permit a new quiet assessment after an overdue general warning.
+They do not establish flash durability or execute a physical power cycle.
+Backpressure regressions also expose the dropped-confirmation counter when an
+earlier confirmation retains the last pending ownership and a newer incident is
+resolved locally; this remains a bounded delivery-capacity limit.
+
+The [maintained detector reference](fall_detection.md) separates implemented
+behavior from threshold assumptions and remaining validation needs.
 
 ## Delivery and motion-health regressions
 
@@ -116,7 +163,8 @@ The deterministic fault suite and production transport suite are both included i
 
 `python -m platformio test -e native -f test_post_fall` runs the production response,
 residual-movement, formatting and outbox logic with synthetic time and inputs.
-It covers the fixed 30-second deadline, final continuous quiet period, missing and
+It covers the fixed 30-second deadline, final continuous quiet period, one later
+quiet upgrade, no invented assistance request in automatic text, missing and
 invalid samples, slow vector drift, late clicks after either warning, preserved SOS,
 rollover, UTF-8 boundaries, two-part warnings, reserved confirmation capacity, stale
 callbacks and exhausted retries. False-alarm tests cover 999/1000/1001 ms double
@@ -161,20 +209,58 @@ flash writes, or physical devices. The one-hour replay is simulated time, not an
 hour-long hardware soak. The test's ordinary-motion trace is synthetic, not a
 recorded human activity dataset.
 
+## Actual companion health methods and recording
+
+`test_health_integration` compiles production `HealthMonitor.cpp` and
+`HealthRecording.cpp` against a narrow host `MyMesh` shell. The methods own
+orchestration; the shell supplies clock/GPIO, the production MPU6050 driver with
+a FIFO bus fake, storage latency/failure and transport enqueue boundaries.
+Coverage includes both simulated motion-service positions, I2C time advancement,
+calibration, persistence delays, original deadlines, gesture priority, repeated
+incidents, false-alarm cancellation, delivery callbacks and saturation, late
+stillness, recording backpressure and availability accounting.
+
+This differs from `test_fall_pipeline`, which remains a component pipeline.
+Neither executes the complete `main.cpp`/`MyMesh.cpp` scheduler, BLE stack or RTOS.
+The USB queue tests exercise production enqueue/delivery code with a manual
+worker; physical task scheduling, internal CDC locks and throughput remain
+unverified. [Recording checks](motion_recording.md) add portable checkpoints,
+strict transport validation and repeated production replay of a generated stream.
+
+## Persistence interruption model
+
+`DurableIncidentFS` separates volatile file contents from durable state and
+models before/after operation cuts, partial writes, failed or torn flushes,
+resolution and recovery-count updates, repair and generation rollover.
+Durably completed resolutions do not revive older alarms in this model.
+Resets before a successful durable recovery-count update cannot consume a
+persisted recovery budget; unknown-clock policy is unchanged.
+
+The bundled Arduino filesystem exposes void `flush`/`close` and discards the
+underlying synchronization result. Tests explicitly demonstrate successful
+cached readback followed by rollback on reboot when flush fails silently.
+Firmware success therefore means **verified readback**, not verified physical
+durability. A lower-level failure-reporting storage boundary and controlled
+power-cut measurements remain necessary before claiming durable completion.
+
 ## What still needs physical testing
 
-- Real I2C timeout duration, bus contention, electrical faults, and RTOS scheduling.
+- Real FIFO capture/overflow and timestamp phase, I2C timeout duration, bus
+  contention, electrical faults, and RTOS scheduling.
   The HAL fake reports errors immediately; asserting its timeout argument does not
   establish that the real driver meets that deadline.
 - Actual main-loop integration, GPIO/PWM waveforms, switch mechanics, ADC accuracy,
-  stack/heap headroom, watchdog behavior, power interruption, and brownout recovery.
+  stack/heap headroom, watchdog behavior, interrupted incident writes, repeated
+  resets, clock continuity, power interruption and brownout recovery.
 - Real RF transmission/reception, target resource pressure, and GPS. The original
   fault harness injects allocation results into `AssistanceDelivery`; the added delivery
   suites exercise `FallAckSender`, Mesh, and Dispatcher with a fake radio. Neither
   establishes physical delivery. Queueing, local TX completion, and repeater echo
   evidence are separate states; none proves a particular person received a message.
 - ROM download recovery, flash/partition correctness, and physical wiring safety.
-- Fall-detection sensitivity/specificity on representative recorded and bench data.
+- Fall-detection sensitivity/specificity on representative recorded and bench data,
+  with soft/slow/supported falls, device drops, loose attachment and daily activities;
+  threshold/filter, gyro temperature and buzzer-coupling evaluation.
   Passing these tests is not a guarantee against bricking or a medical validation.
 
 Known scheduling behavior: delayed polls stretch buzzer phases. ADC divider

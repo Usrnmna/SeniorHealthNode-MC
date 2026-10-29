@@ -1,11 +1,17 @@
 # Version 1.0.0 - Beta
 
+> Historical release-note draft from before the FIFO/context-detection and
+> incident-recovery update. Descriptions and validation below refer to that
+> snapshot, not the current working tree. Current behavior is maintained in the
+> [detector reference](fall_detection.md), [operation guide](operation.md) and
+> [USB reference](usb_cli_reference.md).
+
 SeniorHealthNode adds stationary gyroscope calibration, broader USB configuration,
 detailed sensor statistics, and a dedicated false-alarm response to the combined
 MeshCore BLE companion and fall-monitoring firmware. Sensor freshness checks,
 configuration persistence, and passive-buzzer playback also receive improvements.
 
-These notes describe the current compiled workspace relative to
+These notes describe that earlier compiled workspace relative to
 [v0.1.0-beta](https://github.com/Usrnmna/SeniorHealthNode-MC/releases/tag/v0.1.0-beta),
 whose source tag resolves to `886e31505e04e6cf9368633891e124e2f21c10b8`.
 The intended GitHub release tag is **`v1.0.0-beta`**.
@@ -130,11 +136,12 @@ The existing `health` field `max_gap_ms` is the largest completed interval betwe
 fresh valid samples since startup, in milliseconds. It includes a sensor outage
 once fresh data resumes. Resettable statistics provide separate measurement windows.
 
-Collection uses fixed-size RAM aggregates after detector processing, without
-sample-history storage or per-sample output. Replies are formatted incrementally;
-USB output drains at most 32 bytes per loop and pauses under backpressure. USB
-input retains its 16-byte-per-loop budget. No logging or streaming feature is added.
-Physical timing still requires measurement on the assembled device.
+Statistics use fixed-size RAM aggregates after detector processing. Replies are
+formatted incrementally and offered to the USB worker queue in at most 32-byte
+chunks per CLI service call. Optional [motion recording](motion_recording.md)
+uses a separate bounded RAM ring and offers one additional 31-byte frame per
+call. USB input retains its 16-byte-per-call budget. Backpressure pauses export;
+physical timing still requires measurement on the assembled device.
 
 ### False-alarm confirmation with PRG
 

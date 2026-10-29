@@ -83,6 +83,59 @@ TEST(PostFall, RecoveryRequiresANewFullQuietWindow) {
   quiet(r, 20000, 10000); r.updateDeadline(30000);
   EXPECT_EQ(FallNotice::NoResidualMovement, r.pendingNotice());
 }
+TEST(PostFall, LaterQuietUpgradesGeneralWarningOnceWithoutChangingAlarm) {
+  FallResponse r; r.onFall(0, false); r.updateDeadline(30000);
+  ASSERT_EQ(FallNotice::UserCouldNotConfirm, r.pendingNotice()); r.messageAccepted();
+  quiet(r, 40000, 9980); r.updateDeadline(49980); EXPECT_FALSE(r.messagePending());
+  r.observeMotion(50000, 0, 0, 1, 0); r.updateDeadline(50000);
+  EXPECT_EQ(FallNotice::NoResidualMovement, r.pendingNotice()); EXPECT_TRUE(r.alarmActive());
+  r.messageAccepted(); quiet(r, 50020, 30000); r.updateDeadline(80020);
+  EXPECT_FALSE(r.messagePending()); EXPECT_TRUE(r.alarmActive());
+}
+TEST(PostFall, LaterQuietWaitsForInitialOutboxAcceptanceAndPreservesUserConfirmation) {
+  FallResponse r; r.onFall(0, false); r.updateDeadline(30000);
+  quiet(r, 40000, 10000); r.updateDeadline(50000);
+  EXPECT_EQ(FallNotice::UserCouldNotConfirm, r.pendingNotice());
+  r.messageAccepted(); r.updateDeadline(50001);
+  ASSERT_EQ(FallNotice::NoResidualMovement, r.pendingNotice());
+  click(r, 50100); click(r, 50500); ASSERT_TRUE(click(r, 50900));
+  EXPECT_EQ(FallNotice::UserConfirmedFall, r.pendingNotice());
+  r.updateDeadline(70000); EXPECT_EQ(FallNotice::UserConfirmedFall, r.pendingNotice());
+}
+TEST(PostFall, LateServicingCannotUsePostDeadlineQuietForInitialWarning) {
+  FallResponse r; r.onFall(0, false);
+  for (uint32_t t = 0; t <= 30000; t += 20) r.observeMotion(t, 0, 0, 1, 20);
+  quiet(r, 30020, 10000); r.updateDeadline(40020);
+  EXPECT_EQ(FallNotice::UserCouldNotConfirm, r.pendingNotice());
+  r.messageAccepted(); r.updateDeadline(40021);
+  EXPECT_EQ(FallNotice::NoResidualMovement, r.pendingNotice());
+}
+TEST(PostFall, LaterSensorLossOrVibrationStillBreaksQuiet) {
+  for (bool fault : {false, true}) {
+    FallResponse r; r.onFall(0, false); r.updateDeadline(30000); r.messageAccepted();
+    quiet(r, 40000, 9900);
+    if (fault) r.motionUnavailable(); else r.observeMotion(49920, 0, 0, 1.10f, 6);
+    quiet(r, 49940, 1000); r.updateDeadline(50940);
+    EXPECT_FALSE(r.messagePending()); EXPECT_TRUE(r.alarmActive());
+  }
+}
+TEST(PostFall, EarlierConfirmationCannotDiscardNewIncidentDeadlineAssessment) {
+  FallResponse r; r.onFall(0, false); click(r, 100); click(r, 500);
+  ASSERT_TRUE(r.updateButton(3101, false));
+  const uint32_t old = r.pendingIncident();
+  ASSERT_EQ(FallNotice::UserConfirmedFalseAlarm, r.pendingNotice());
+  ASSERT_TRUE(r.onFall(4000, false));
+  r.updateDeadline(34000); // Missing data at this deadline cannot establish quiet.
+  EXPECT_EQ(old, r.pendingIncident());
+  quiet(r, 40000, 10000); r.updateDeadline(50000);
+  EXPECT_EQ(old, r.pendingIncident()); // A later quiet window cannot rewrite the assessment.
+  r.messageAccepted(); r.updateDeadline(50001);
+  EXPECT_EQ(old + 1, r.pendingIncident());
+  EXPECT_EQ(FallNotice::UserCouldNotConfirm, r.pendingNotice());
+  r.messageAccepted(); r.updateDeadline(50002);
+  EXPECT_EQ(FallNotice::NoResidualMovement, r.pendingNotice());
+  EXPECT_TRUE(r.alarmActive());
+}
 TEST(PostFall, SlowVectorDriftBreaksQuietEvenWithSmallPerSampleChanges) {
   FallResponse r; r.onFall(0, false);
   for (uint32_t t = 0; t <= 30000; t += 20) {
@@ -114,7 +167,7 @@ TEST(PostFall, DeadlineQuietAndLateClicksSurviveTimerRollover) {
   click(r, start + 31000); click(r, start + 31400); EXPECT_TRUE(click(r, start + 31800));
   EXPECT_EQ(FallNotice::UserConfirmedFall, r.pendingNotice());
 }
-TEST(PostFall, RebootDoesNotRestoreIncidentOrQuietEvidence) {
+TEST(PostFall, DefaultConstructionRequiresExplicitIncidentRestore) {
   FallResponse r; r.onFall(0, false); quiet(r, 0, 30000); r.updateDeadline(30000);
   FallResponse reboot; reboot.updateDeadline(90000);
   EXPECT_FALSE(reboot.alarmActive()); EXPECT_FALSE(reboot.messagePending());
@@ -232,6 +285,43 @@ TEST(PostFall, PendingFalseAlarmRetainsItsOriginalIncidentAndChannelUnderBackpre
   EXPECT_EQ(incident, r.pendingIncident()); EXPECT_NE(incident, r.incidentId());
   EXPECT_EQ(0, memcmp(first.key, r.pendingChannel().key, first.key_length));
 }
+TEST(PostFall, FullPendingConfirmationCapacityStillResolvesLocallyAndReportsLoss) {
+  FallResponse r;r.onFall(0,false);click(r,100);click(r,400);
+  ASSERT_TRUE(r.updateButton(3101,false));const auto first=r.pendingIncident();
+  ASSERT_TRUE(r.onFall(4000,false));click(r,4100);click(r,4400);
+  ASSERT_TRUE(r.updateButton(7101,false));EXPECT_FALSE(r.alarmActive());
+  EXPECT_EQ(first,r.pendingIncident());EXPECT_EQ(1u,r.droppedConfirmations());
+  r.messageAccepted();ASSERT_TRUE(r.onFall(8000,false));
+  EXPECT_TRUE(r.alarmActive());EXPECT_EQ(1u,r.droppedConfirmations());
+}
+
+TEST(PostFall, EveryExplicitResponseRetainsItsOwnerAndCountsLaterSaturation) {
+  const FallNotice responses[] = {FallNotice::AssistanceRequested,
+      FallNotice::UserConfirmedFall, FallNotice::UserConfirmedFalseAlarm};
+  for (const auto older : responses) for (const auto newer : responses) {
+    SCOPED_TRACE(fallNoticeText(older));
+    SCOPED_TRACE(fallNoticeText(newer));
+    FallChannel first, next;
+    ASSERT_TRUE(FallChannel::parse("public #first", first));
+    ASSERT_TRUE(FallChannel::parse("public #next", next));
+    FallResponse r;
+    const auto resolve = [&](FallNotice notice, uint32_t start) {
+      if (notice == FallNotice::UserConfirmedFall) {
+        r.updateDeadline(start + HealthNodeConfig::response_timeout_ms);
+        start += HealthNodeConfig::response_timeout_ms;
+      }
+      click(r, start + 100); click(r, start + 400);
+      return notice == FallNotice::UserConfirmedFalseAlarm ?
+          r.updateButton(start + 3101, false) : click(r, start + 800);
+    };
+    ASSERT_TRUE(r.onFall(0, false, first)); ASSERT_TRUE(resolve(older, 0));
+    ASSERT_EQ(older, r.pendingNotice()); const auto owner = r.pendingIncident();
+    ASSERT_TRUE(r.onFall(40000, false, next)); ASSERT_TRUE(resolve(newer, 40000));
+    EXPECT_FALSE(r.alarmActive()); EXPECT_EQ(older, r.pendingNotice());
+    EXPECT_EQ(owner, r.pendingIncident()); EXPECT_EQ(1u, r.droppedConfirmations());
+    EXPECT_EQ(0, memcmp(first.key, r.pendingChannel().key, first.key_length));
+  }
+}
 
 TEST(FallNoticeText, JoinAddsSeparatorOnlyBetweenNonemptyTexts) {
   char dest[160];
@@ -241,11 +331,12 @@ TEST(FallNoticeText, JoinAddsSeparatorOnlyBetweenNonemptyTexts) {
   EXPECT_STREQ("Help | USER COULD NOT CONFIRM THEIR CONDITION", dest);
   ASSERT_TRUE(FallNoticeMessage::join(dest, sizeof(dest), "Help", "")); EXPECT_STREQ("Help", dest);
 }
-TEST(FallNoticeText, BothWarningsAppendExactTextAfterExistingLocation) {
+TEST(FallNoticeText, AutomaticWarningsNeverAssertAUserRequest) {
   for (auto notice : {FallNotice::UserCouldNotConfirm, FallNotice::NoResidualMovement}) {
     const auto m = FallNoticeMessage::build(notice, false, 0, 0);
     ASSERT_EQ(1u, m.count);
-    EXPECT_EQ(std::string(HealthNodeConfig::ack_message) + " | HOME | " + fallNoticeText(notice), body(m));
+    EXPECT_EQ(std::string(FallNoticeMessage::automatic_message) + " | HOME | " + fallNoticeText(notice), body(m));
+    EXPECT_EQ(std::string::npos, body(m).find("User Has Requested Assistance"));
   }
 }
 TEST(FallNoticeText, LongFallbackUsesCompleteLabelledParts) {
@@ -253,7 +344,7 @@ TEST(FallNoticeText, LongFallbackUsesCompleteLabelledParts) {
   const auto m = FallNoticeMessage::build(FallNotice::NoResidualMovement, false, 0, 0, location.c_str());
   ASSERT_EQ(2u, m.count);
   EXPECT_EQ(std::string("[1/2] ") + HealthNodeConfig::no_movement_message, body(m));
-  EXPECT_EQ(std::string("[2/2] ") + HealthNodeConfig::ack_message + " | " + location, body(m, 1));
+  EXPECT_EQ(std::string("[2/2] ") + FallNoticeMessage::automatic_message + " | " + location, body(m, 1));
   EXPECT_LE(m.length[0], 165u); EXPECT_LE(m.length[1], 165u);
 }
 TEST(FallNoticeText, ConfirmationIsExactIndependentText) {
@@ -274,7 +365,7 @@ TEST(FallNoticeText, Utf8BytesRemainIntactAcrossMultipartAndFallback) {
   const auto m = FallNoticeMessage::build(FallNotice::NoResidualMovement, false, 0, 0, location.c_str());
   ASSERT_EQ(2u, m.count);
   EXPECT_EQ(std::string("[1/2] ") + HealthNodeConfig::no_movement_message, body(m));
-  EXPECT_EQ(std::string("[2/2] ") + HealthNodeConfig::ack_message + " | " + location, body(m, 1));
+  EXPECT_EQ(std::string("[2/2] ") + FallNoticeMessage::automatic_message + " | " + location, body(m, 1));
   const auto fallback = FallNoticeMessage::build(FallNotice::UserCouldNotConfirm, true, NAN, 0, u8"Maison \u00e9t\u00e9");
   ASSERT_EQ(1u, fallback.count); EXPECT_NE(std::string::npos, body(fallback).find(u8" | Maison \u00e9t\u00e9 | USER"));
 }
@@ -347,11 +438,24 @@ TEST(FallOutbox, FailedFirstPartStillAllowsSecondAndRetainsFailure) {
 TEST(FallOutbox, ConfirmationHasReservedSlotAndPriorityOverWaitingWarning) {
   NoticeRig r; r.enqueue(FallNotice::AssistanceRequested, 1); r.poll(0);
   ASSERT_TRUE(r.enqueue(FallNotice::UserCouldNotConfirm, 2));
-  EXPECT_FALSE(r.enqueue(FallNotice::AssistanceRequested, 3));
+  EXPECT_FALSE(r.enqueue(FallNotice::UserCouldNotConfirm, 3));
   ASSERT_TRUE(r.enqueue(FallNotice::UserConfirmedFall, 2));
   r.complete(); r.poll(1);
   ASSERT_EQ(2u, r.link.sent.size()); EXPECT_EQ("USER HAS CONFIRMED FALL", r.link.sent.back());
   r.complete(); r.poll(2); EXPECT_FALSE(r.outbox.busy());
+}
+TEST(FallOutbox, EarlyAssistanceUsesReservedCapacityAheadOfAnotherIncidentsWarning) {
+  NoticeRig r; ASSERT_TRUE(r.enqueue(FallNotice::AssistanceRequested, 1)); r.poll(0);
+  ASSERT_TRUE(r.enqueue(FallNotice::UserCouldNotConfirm, 2));
+  ASSERT_TRUE(r.enqueue(FallNotice::AssistanceRequested, 3));
+  EXPECT_FALSE(r.enqueue(FallNotice::UserConfirmedFalseAlarm, 4));
+  r.complete(); r.poll(1);
+  ASSERT_EQ(2u, r.link.sent.size());
+  EXPECT_EQ(std::string(HealthNodeConfig::ack_message) + " | HOME", r.link.sent.back());
+  r.complete(); r.poll(2);
+  ASSERT_EQ(3u, r.link.sent.size());
+  EXPECT_NE(std::string::npos, r.link.sent.back().find(HealthNodeConfig::unconfirmed_message));
+  r.complete(); r.poll(3); EXPECT_FALSE(r.outbox.busy());
 }
 TEST(FallOutbox, ExhaustedWarningDoesNotBlockConfirmation) {
   NoticeRig r; r.link.result = AssistanceTransport::NoPacket;
