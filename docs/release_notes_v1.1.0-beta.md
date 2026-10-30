@@ -1,33 +1,16 @@
 # Version 1.1.0 - Beta
 
-**Release identifier: `v1.1.0-beta`. Status: local, unpublished candidate.**
-
 SeniorHealthNode combines MeshCore BLE companion services and fall monitoring in
 one `heltec_v4_companion_radio_ble` image. This candidate adds buffered motion
 acquisition, experimental orientation-based detection, bounded incident recovery,
 and capture/replay diagnostics. The upstream MeshCore base remains 1.17.0.
 
-## Comparison scope
-
-The remote `v1.0.0-beta` tag resolves to
-[`b11597813f8d92c1c4476f0397ace64dbaf37bed`](https://github.com/Usrnmna/SeniorHealthNode-MC/commit/b11597813f8d92c1c4476f0397ace64dbaf37bed),
-verified against `origin` on 2026-10-29. These notes compare that source with
-committed changes through `f33dd01b2ec8791cd10ec64f41112e1f51a28ac6` and the current
-uncommitted candidate changes. No v1.1.0-beta tag, commit or release is created by
-this preparation.
-
-The [published v1.0.0-beta description](https://github.com/Usrnmna/SeniorHealthNode-MC/releases/tag/v1.0.0-beta)
-already describes some USB configuration and buzzer changes that appear after
-the tagged source in Git history. Its uploaded binary has not been reconstructed
-or compared here. The source tag is the comparison baseline; features mentioned
-in that description are not assumed to be new to every installed v1.0.0-beta
-binary. The [earlier local notes](release_notes_v1.0.0-beta.md) remain historical.
 
 ## Detection and acquisition
 
 - MPU6050 acquisition uses a 50 Hz hardware FIFO with 14-byte records. Bounded
   two-record reads and at most four samples per poll retain chronological sample
-  processing across short loop delays. Configuration remains ±8 g, ±500 degrees/s
+  processing across short loop delays. Configuration remains Ãƒâ€šÃ‚Â±8 g, Ãƒâ€šÃ‚Â±500 degrees/s
   and `DLPF_CFG=3`; wiring and the disconnected INT pin remain unchanged.
 - FIFO overflow, excessive backlog, partial reads, saturation and timing
   discontinuities are exposed rather than hidden by a replacement latest sample.
@@ -47,7 +30,7 @@ binary. The [earlier local notes](release_notes_v1.0.0-beta.md) remain historica
   intervals and rejected candidates.
 
 Thresholds and exact evidence windows are maintained in the
-[detector reference](fall_detection.md). This remains possible-fall detection,
+[detector reference](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/fall_detection.md). This remains possible-fall detection,
 not a diagnosis or validated emergency service.
 
 ## Incident handling and delivery
@@ -75,8 +58,8 @@ not a diagnosis or validated emergency service.
 
 The existing double/triple PRG response gestures remain available. Radio queueing,
 local transmission, repeater echoes and recipient reception remain distinct.
-See [alarm operation](operation.md), [delivery behavior](message_delivery_changes.md)
-and [incident storage limits](incident_storage.md).
+See [alarm operation](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/operation.md), [delivery behavior](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/message_delivery_changes.md)
+and [incident storage limits](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/incident_storage.md).
 
 ## USB configuration, diagnostics and recording
 
@@ -110,8 +93,8 @@ published v1.0.0-beta text.
   host tests to exercise production service ordering and parser behavior. This
   is still one firmware image with BLE and health services on the same node.
 
-See the [USB reference](usb_cli_reference.md), [recording and replay guide](motion_recording.md)
-and [capture bundle guide](capture_bundles.md). Generated fixtures must be
+See the [USB reference](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/usb_cli_reference.md), [recording and replay guide](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/motion_recording.md)
+and [capture bundle guide](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/capture_bundles.md). Generated fixtures must be
 regenerated after source/configuration changes, including the version update.
 
 ## Buzzer and firmware identification
@@ -145,11 +128,31 @@ There are no tracked GitHub Actions workflows, issue/PR templates or automated
 release configuration in this checkout. Contributor and security guidance reflect
 the current operations; no hosted CI run is implied.
 
-The pre-existing uncommitted candidate work includes checked incident I/O,
-companion service integration, capture collection/provenance tooling, associated
-tests and guides. This release preparation adds the version/splash update and
-documentation corrections. All remain local candidate changes until separately
-committed and released.
+Checked incident I/O, companion service integration, capture/provenance tooling,
+associated tests, the version/splash update and documentation are committed in
+the source revision identified above. This preparation rebuilds that firmware
+and updates release assets and evidence; it introduces no firmware behavior change.
+
+## Release assets
+
+The planned GitHub upload inventory contains exactly these three files:
+
+| Filename | Purpose and use |
+| --- | --- |
+| `SHN_v1.1.0-beta_firmware-merged.bin` | Installation download: combined ESP32-S3 firmware for `heltec_v4_companion_radio_ble`; flash at **0x0**. |
+| `VERIFICATION.zip` | Build/source manifest, component hashes, image-layout checks, build/test logs and verification report. Extract to inspect the evidence. Not firmware. |
+| `SHA256SUMS.txt` | SHA-256 checksums for the merged firmware and verification archive. Verify both downloaded files before use. |
+
+These assets are prepared locally, not yet published. The existing release notes
+supply the GitHub release-page body; no separate notes attachment is required.
+Mark `v1.1.0-beta` as a prerelease when publishing through a separately authorized
+release operation. Application-only binaries, ELF files and dependency caches
+are not upload assets.
+
+Follow the [build and installation guide](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/build-validation.md#uploading-the-combined-firmware)
+for the combined image. The release download is named
+`SHN_v1.1.0-beta_firmware-merged.bin`; its flash offset is **0x0**.
+Do not flash this merged image at the application-only offset `0x10000`.
 
 ## Upgrade and compatibility
 
@@ -157,7 +160,7 @@ committed and released.
    channel and calibration settings using an appropriate secure backup process.
 2. Review buzzer idle polarity and the enabled experimental detector paths.
    Rebuild only `heltec_v4_companion_radio_ble` following the
-   [build and upload guide](build-validation.md).
+   [build and upload guide](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/build-validation.md).
 3. Use PlatformIO upload, or flash `firmware-merged.bin` at `0x0` with an
    appropriate flash tool. The application-only `firmware.bin` belongs at
    `0x10000` with matching bootloader and partition files. Do not erase flash as
@@ -165,42 +168,4 @@ committed and released.
 4. Check the device version, BLE pairing/client behavior, radio/channel settings,
    `health detail`, `health timing`, fresh motion, PRG gestures, buzzer tone and
    silence, and independently observed reception. Follow the
-   [post-flash procedure](usb_cli_reference.md#post-flash-usb-cli-verification).
-
-No target split, pin reassignment or partition migration is introduced here.
-Behavioral changes include quicker rearming, experimental context detection,
-late quiet updates and possible alarm restoration after reboot. Existing
-`SPIFFS.begin(true)` startup behavior can format storage after certain mount
-failures; this release does not introduce a preservation guarantee or change
-that policy. Firmware update and power-loss recovery require bench checks.
-
-## Validation and remaining limits
-
-Local verification on 2026-10-29:
-
-| Check | Result |
-| --- | --- |
-| `heltec_v4_companion_radio_ble` build and `mergebin` | Passed; application uses 1,330,133 bytes of flash and 213,608 bytes of RAM according to PlatformIO. |
-| `native` and `native_delivery` | 771 test cases passed across 26 suites. |
-| Python capture/replay checks | 62 tests passed. |
-| Fresh actual-companion fixture replay | 1,007 records / 944 samples; three identical runs. |
-| Documentation | 510 local links/anchors across 34 Markdown files passed. |
-| Configuration and diff | PlatformIO INI and board JSON parsed; `git diff --check` passed; built application contains `v1.1.0-beta`. |
-
-Initial sandboxed host/Python runs encountered Windows access-denied errors;
-the passing runs used the same checkout outside that sandbox. No hosted CI was
-run. Local build/test logs are under `.pio/v1.1.0-beta-*.log`.
-
-Merged-image SHA-256:
-`324cc6f6be2fa261adeec176e6d246350b76a6000d392cf5180c5d3350e48c57`.
-Maintained-source identity:
-`88e2d1103dadfe35d2deece927a220795b4cee4a8dfb9e8f1d2f894887e667a7`.
-These identify this local candidate only; rebuilds or further edits require fresh
-evidence. The [validation guide](build-validation.md) defines commands and scope.
-
-No physical device was flashed or tested for this release preparation. Host tests
-and successful image compilation do not establish I2C timing, BLE responsiveness,
-RF delivery, GPIO/PWM behavior, battery accuracy, storage power-loss durability
-or fall-detection accuracy. Automatic filesystem formatting, clock-uncertain
-recovery, bounded message capacity and sensitive mixed logs remain significant
-operational limitations. A repeater echo does not prove human receipt.
+   [post-flash procedure](https://github.com/Usrnmna/SeniorHealthNode-MC/blob/cbe2b9d8057533d591bd4326c6a149c6447e9515/docs/usb_cli_reference.md#post-flash-usb-cli-verification).
