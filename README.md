@@ -1,5 +1,7 @@
 # SeniorHealthNode
 
+Current firmware candidate: **v1.1.0-beta** · [Release notes and upgrade guidance](docs/release_notes_v1.1.0-beta.md)
+
 ![SeniorHealthNode concept illustration: a chest-worn motion node linked through a radio mesh to a receiving handset.](docs/assets/readme/seniorhealthnode-banner.png)
 
 *Concept illustration; device appearance and radio connections are schematic.*
@@ -130,6 +132,9 @@ is available as a maintenance procedure; detection pauses during collection.
 | Understand message retries and delivery evidence | [Incident and notification behavior](docs/fall_detection.md#detection-and-notification-ownership), [delivery reference](docs/message_delivery_changes.md) |
 | Inspect source organization and scheduling | [Firmware architecture](docs/architecture.md), [buffered acquisition](docs/fall_detection.md#acquisition-and-sample-timing) |
 | Build and evaluate the software | [Build and validation](docs/build-validation.md), [virtual fault testing](docs/virtual-fault-testing.md) |
+| Record and review motion evidence | [USB recording and replay](docs/motion_recording.md), [capture bundles](docs/capture_bundles.md), [bench evidence template](docs/fall_bench_template.md) |
+| Understand restart and storage limits | [Checked incident storage](docs/incident_storage.md) |
+| Review release changes and upgrades | [v1.1.0-beta release notes](docs/release_notes_v1.1.0-beta.md) |
 | Integrate a client | [Companion protocol](docs/companion_protocol.md) |
 
 Software checks exercise program behavior. They do not establish physical sensor
@@ -142,6 +147,9 @@ defines those evidence boundaries.
 SeniorHealthNode is based on **MeshCore 1.17.0**. Its only firmware target,
 `heltec_v4_companion_radio_ble`, combines BLE companion services and local health
 monitoring in one image on the same node.
+
+The device reports **v1.1.0-beta** as the SeniorHealthNode firmware version.
+This release identifier is independent of the upstream MeshCore base version.
 
 The [upstream MeshCore project](https://github.com/ripplebiz/MeshCore) and
 [MeshCore documentation](https://docs.meshcore.io) describe the wider ecosystem.

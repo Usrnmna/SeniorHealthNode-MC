@@ -1,4 +1,8 @@
+#ifdef HEALTH_MONITOR_HOST_HEADER
+#include HEALTH_MONITOR_HOST_HEADER
+#else
 #include "MyMesh.h"
+#endif
 #if ENV_INCLUDE_MPU6050
 
 // Snapshot rows are formatted only when the previous USB row has drained.
@@ -78,8 +82,23 @@ bool MyMesh::handleDiagnosticCommand(const char* command) {
     usb_reply.append("recovery=%s persistence_pending=%u persistence_fault=%u initial_pending=%u coalesced_initials=%lu\n",
         FallIncidentStore::outcomeName(recovery_outcome),unsigned(persistence_dirty),unsigned(persistence_fault),
         unsigned(initial_alert.pending()),(unsigned long)initial_alert.coalescedCount());
-    usb_reply.append("persistence_success=verified-readback; physical_durability=unverified\n");
+    usb_reply.append("persistence_result=%s slot=%u errno=%d close_errno=%d checked_api=%u; physical_durability=unverified\n",
+        FallIncidentStore::saveStageName(persistence_result.stage),unsigned(persistence_result.slot),
+        persistence_result.error,persistence_result.close_error,unsigned(persistence_result.api_checked));
     usb_reply.append("dropped_confirmations=%lu\n",(unsigned long)fall_response.droppedConfirmations());
+    const int mounted = incidentStorageMounted();
+    usb_reply.append("storage_boot=%s mounted=%s format_history=unknown\n",
+        !storage_startup_attempted ? "not-attempted" : storage_startup_ok ? "ok" : "failed",
+        mounted < 0 ? "unknown" : mounted ? "yes" : "no");
+    for (unsigned slot = 0; slot < 2; ++slot) {
+      const auto& read = recovery_reads[slot];
+      usb_reply.append("boot_read%u=%s errno=%d close=%d checked=%u\n", slot,
+          FallIncidentStore::readStageName(read.stage), read.error, read.close_error, unsigned(read.api_checked));
+    }
+    const auto& read = persistence_result.read_result;
+    usb_reply.append("save_read=%s slot=%u errno=%d close=%d checked=%u\n",
+        FallIncidentStore::readStageName(read.stage), unsigned(read.slot), read.error,
+        read.close_error, unsigned(read.api_checked));
     usb_reply.append("uptime_ms=%lu initialized=%u valid=%u fault=%u sample_age_ms=",
         (unsigned long)now, unsigned(sensors.motion.initialized()), unsigned(sensors.motion.valid), unsigned(motion_health.fault()));
     if (sensors.motion.valid) usb_reply.append("%lu\n", (unsigned long)sensors.motion.sampleAgeMs(now));

@@ -1,6 +1,8 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include "MyMesh.h"
+#include "CompanionServices.h"
+#include "CompanionStorageStartup.h"
 #if ENV_INCLUDE_MPU6050
 #include <helpers/ui/AlarmBuzzer.h>
 #endif
@@ -177,9 +179,7 @@ void setup() {
     #endif
   );
 #elif defined(ESP32)
-  SPIFFS.begin(true);
-  store.begin();
-  the_mesh.begin(
+  startCompanionStorage(SPIFFS, store, the_mesh,
     #ifdef DISPLAY_CLASS
         disp != NULL
     #else
@@ -261,27 +261,15 @@ void setup() {
 }
 
 void loop() {
-#if ENV_INCLUDE_MPU6050
-  the_mesh.pollMotion();
-  const bool alarm_owned_button = the_mesh.fallAlarmActive();
-  the_mesh.pollFallResponse();
-  the_mesh.pollLowBattery();
-#endif
-  the_mesh.loop();
-  interface_manager.loop();
-#if ENV_INCLUDE_MPU6050
-  the_mesh.pollMotion();
-  const bool alarm_after_radio = the_mesh.fallAlarmActive();
-  the_mesh.pollFallResponse();
-#endif
-  sensors.loop();
+  serviceCompanionLoop(the_mesh, interface_manager, sensors, [](bool alarm_owned_button) {
 #ifdef DISPLAY_CLASS
 #if ENV_INCLUDE_MPU6050
-  // Alarm clicks must not also navigate, mute or shut down the companion UI.
-  ui_task.suppressUserButton(alarm_owned_button || alarm_after_radio || the_mesh.fallAlarmActive());
+    // Alarm clicks must not also navigate, mute or shut down the companion UI.
+    ui_task.suppressUserButton(alarm_owned_button);
 #endif
-  ui_task.loop();
+    ui_task.loop();
 #endif
+  });
   rtc_clock.tick();
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();

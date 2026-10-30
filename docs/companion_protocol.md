@@ -11,6 +11,12 @@ It is platform-agnostic and can be used for Android, iOS, Python, JavaScript, or
 
 ## SeniorHealthNode extension
 
+The device-info firmware string is `v1.1.0-beta`, the SeniorHealthNode release
+identifier. The upstream base remains MeshCore 1.17.0; upstream version references
+in this guide do not describe the fork's release numbering. Client compatibility
+must be checked against protocol behavior rather than comparing these version
+numbers as one sequence.
+
 The single `heltec_v4_companion_radio_ble` image uses the standard companion
 custom-variable frames to configure its fall-message destination and control
 stationary gyroscope calibration. The upstream

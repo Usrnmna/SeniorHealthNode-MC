@@ -245,6 +245,11 @@ writes retry at five-second intervals. Abrupt power loss before a transition is
 saved can lose a new incident or retain an older unresolved one. Physical power-cut
 and filesystem tests remain necessary. Normal flash operations may stall the
 loop; FIFO covers short stalls, while longer interruptions invalidate evidence.
+The ESP32 writer checks open, full write, C-stream flush and backend close before
+record verification. The diagnostic result identifies the failed operation;
+API success and readback do not prove physical durability. See
+[incident storage and mount-policy limits](incident_storage.md), including the
+unchanged `SPIFFS.begin(true)` automatic-format risk and unknown-downtime policy.
 
 ## Tuning and software checks
 

@@ -4,8 +4,8 @@ The [USB CLI reference](usb_cli_reference.md) documents companion `get`/`set`
 configuration, `set username`, and detailed health/motion statistics. Statistics
 use bounded RAM aggregates after fall processing; event/decision traces use
 fixed-size RAM rings, and replies drain incrementally. No sample-rate flash
-logging or continuous streaming is performed. Hardware timing remains subject to
-bench verification.
+logging is performed. Optional USB recording streams only while explicitly
+enabled; hardware timing remains subject to bench verification.
 
 `heltec_v4_companion_radio_ble` is the only firmware target. It includes MeshCore BLE, contacts, messaging, display, GPS and environmental telemetry, plus GY-521/MPU6050 fall detection, SOS, PRG acknowledgement and low-battery reminders.
 
@@ -43,6 +43,16 @@ also documents the separate receive-gain controls.
 ## Source layout
 
 Health monitoring runs inside the **BLE companion**. `main.cpp` services motion, alarms, radio, BLE and the display in the same firmware loop.
+
+[`CompanionServices.h`](../examples/companion_radio/CompanionServices.h) defines
+the shared loop order used by production and integration tests.
+[`CompanionCommandService.cpp`](../examples/companion_radio/CompanionCommandService.cpp)
+owns bounded USB command parsing, and
+[`CompanionStorageStartup.h`](../examples/companion_radio/CompanionStorageStartup.h)
+exposes the existing storage startup sequence without changing mount/format policy.
+The [incident storage guide](incident_storage.md) describes checked I/O and
+failure reporting. The [recording guide](motion_recording.md) and
+[capture bundle guide](capture_bundles.md) cover optional host evidence tooling.
 
 | File | Responsibility |
 | --- | --- |

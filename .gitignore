@@ -4,7 +4,7 @@
 # save maintained documents under docs/, outside ignored output directories.
 # New documents and code changes are included with git add, not ignore entries.
 # Maintained GitHub release notes under docs/ remain trackable, including
-# docs/release_notes_v1.0.0-beta.md. Release firmware and build output stay ignored.
+# docs/release_notes_v1.1.0-beta.md. Release firmware and build output stay ignored.
 
 # Local project instructions; do not publish to GitHub.
 /AGENTS.md

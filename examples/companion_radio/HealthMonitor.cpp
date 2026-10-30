@@ -16,6 +16,8 @@
 #include "health/LowBatteryAlert.h"
 #include "health/FallChannelStore.h"
 #include "health/GyroCalibrationStore.h"
+#include "health/IncidentWriteIO.h"
+#include "health/IncidentReadIO.h"
 #include <helpers/ui/AlarmBuzzer.h>
 
 AlarmBuzzer alarm_buzzer; // Include AlarmBuzzer.h elsewhere to call alarm_buzzer.beep().
@@ -25,7 +27,17 @@ AlarmBuzzer alarm_buzzer; // Include AlarmBuzzer.h elsewhere to call alarm_buzze
 void MyMesh::restoreFallIncident() {
   // The ESP32 fallback epoch and saved contact timestamps do not prove elapsed
   // time across power loss. Use bounded unknown-clock recovery on this target.
-  const auto recovery = FallIncidentStore::load(*_store->getPrimaryFS(), getRTCClock()->getCurrentTime(), false);
+#ifdef HEALTH_MONITOR_HOST_HEADER
+  HostIncidentReadIO io{*_store->getPrimaryFS()};
+  FallIncidentStore::CheckedIncidentReader<HostIncidentReadIO> reader(io);
+#elif defined(ESP32)
+  FallIncidentStore::IncidentReadPosix io;
+  FallIncidentStore::CheckedIncidentReader<FallIncidentStore::IncidentReadPosix> reader(io);
+#else
+  FallIncidentStore::ArduinoReader<FILESYSTEM> reader{*_store->getPrimaryFS()};
+#endif
+  const auto recovery = FallIncidentStore::loadWithReader(reader, getRTCClock()->getCurrentTime(), false);
+  recovery_reads[0] = recovery.reads[0]; recovery_reads[1] = recovery.reads[1];
   recovery_outcome = recovery.outcome; durable_incident = recovery.value;
   fall_response.seedIncident(durable_incident.incident);
   if (recovery.shouldResume()) {
@@ -37,6 +49,18 @@ void MyMesh::restoreFallIncident() {
   } else if (recovery.outcome == FallIncidentStore::Expired || recovery.outcome == FallIncidentStore::RecoveryLimit) {
     durable_incident.active=false; persistence_dirty=true;
   } else if (recovery.outcome == FallIncidentStore::Corrupt) persistence_fault=true;
+}
+
+// Live observation, independent of historical begin/recovery results. It neither
+// mounts storage nor retries boot recovery after the device is already running.
+int MyMesh::incidentStorageMounted() const {
+#ifdef HEALTH_MONITOR_HOST_HEADER
+  return _store->getPrimaryFS()->mounted;
+#elif defined(ESP32)
+  return FallIncidentStore::IncidentReadPosix{}.mounted();
+#else
+  return -1;
+#endif
 }
 
 // Queue one small durable state transition. A newer resolution/open supersedes
@@ -55,7 +79,19 @@ void MyMesh::pollIncidentPersistence(uint32_t now) {
   if (!persistence_dirty || (persistence_attempted && uint32_t(now-persistence_retry_at)<5000)) return;
   persistence_attempted=true; persistence_retry_at=now;
   const uint32_t write_started=millis();
-  persistence_fault=!FallIncidentStore::save(*_store->getPrimaryFS(),durable_incident);
+#ifdef HEALTH_MONITOR_HOST_HEADER
+  persistence_result=saveHealthIncident(*_store->getPrimaryFS(),durable_incident);
+#elif defined(ESP32)
+  FallIncidentStore::IncidentStdio io;
+  FallIncidentStore::CheckedIncidentWriter<FallIncidentStore::IncidentStdio> writer(io);
+  FallIncidentStore::IncidentReadPosix read_io;
+  FallIncidentStore::CheckedIncidentReader<FallIncidentStore::IncidentReadPosix> reader(read_io);
+  persistence_result=FallIncidentStore::saveWithReader(reader,durable_incident,writer);
+#else
+  FallIncidentStore::ArduinoWriter<FILESYSTEM> writer{*_store->getPrimaryFS()};
+  persistence_result=FallIncidentStore::saveChecked(*_store->getPrimaryFS(),durable_incident,writer);
+#endif
+  persistence_fault=!persistence_result.success();
   motion_timing.persistence(uint32_t(millis()-write_started));
   if (!persistence_fault) persistence_dirty=false;
   // Filesystem operations may stall; FIFO captures short stalls, and longer

@@ -34,6 +34,9 @@ has unqueued frames, or if worker initialization failed. Once the previous
 `End` is queued, FIFO ordering keeps it before the next `Begin` even when its USB
 write is still in progress. Unrelated diagnostic traffic does not prevent start.
 Separate complete sessions must still be extracted for replay.
+The optional [capture collection and bundle tool](capture_bundles.md) preserves
+original mixed bytes, connection cuts and damaged segments while extracting
+validated sessions. It leaves this version 1 firmware format unchanged.
 
 The serial log must preserve bytes, including the ASCII record-separator byte
 `0x1e`. Text editors, terminal line wrapping and newline conversion can damage
@@ -85,7 +88,8 @@ and payloads, compiles the host replay executable, and runs the same capture
 twice. `--repeat 3` changes the repetition count; `--compiler <path>` selects
 another C++17 compiler. `--decoded <path>` optionally writes the validated
 binary records after successful replay; this path cannot alias the original
-capture, including through a hard link. Calibration metadata must satisfy the
+capture, including through a hard link, and must not already exist. Exclusive
+creation also rejects a destination created during replay. Calibration metadata must satisfy the
 same validity rules as the sensor's applied correction. The repository MinGW
 compiler is used when available; otherwise `g++` must be available on `PATH`.
 
@@ -259,6 +263,12 @@ capture-to-production replay. Actual `HealthMonitor.cpp`/`HealthRecording.cpp`
 integration fixtures provide a separate orchestration check; they still use
 host clocks, sensor/storage/transport boundaries and simulated USB capacity.
 
+Standalone replay fingerprints the raw capture, maintained firmware inputs and
+host replay sources/headers before and after processing. Observed changes fail
+the operation before publishing `--decoded` output. Fingerprinting adds host
+file reads and does not provide a filesystem snapshot, compiler-package
+attestation or protection against changes after the final check.
+
 Host execution uses recorded binary32 inputs with the host compiler and math
 library. A near-threshold floating-point difference across architectures is a
 replay divergence requiring investigation, not an automatically accepted match.
@@ -269,4 +279,6 @@ actual enclosure and simultaneous services are the next validation step.
 
 Related references: [fall detection](fall_detection.md),
 [USB commands](usb_cli_reference.md), [build verification](build-validation.md)
-and [fault-test scope](virtual-fault-testing.md).
+and [fault-test scope](virtual-fault-testing.md). Operational evidence uses the
+[bench template](fall_bench_template.md); [capture bundles](capture_bundles.md)
+associate retained source/build inputs with strict replay outcomes.

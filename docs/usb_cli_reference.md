@@ -7,6 +7,9 @@ case-sensitive and terminated by CR, LF, or CRLF. Send one command and wait for
 its complete response before sending another. The maximum command length is 158
 bytes, excluding the terminator; an oversized or NUL-containing line is rejected
 in full. Input is not echoed by the firmware.
+An unavailable USB receive queue or failed receive leaves the partial command
+unchanged until actual bytes arrive. Negative driver status values are not
+converted into command bytes. This does not establish physical reconnect timing.
 
 ```text
 help
@@ -152,7 +155,7 @@ successful changes. The upstream remote-node reference in
 | Command | Output |
 | --- | --- |
 | `health` | Initial/response delivery state, separate `sensor` and `detector` availability, sample age and startup gap count. |
-| `health detail` | Sensor validity/fault, sample age, detector availability/phase and refractory state, unavailable duration, calibration, alarm/delivery state, restart outcome, pending/failed persistence, coalesced initial alerts and omitted confirmations under delivery saturation. |
+| `health detail` | Sensor validity/fault, sample age, detector availability/phase and refractory state, unavailable duration, calibration, alarm/delivery state, restart outcome, startup/current storage observations, checked incident read/write results, pending/failed persistence, coalesced initial alerts and omitted confirmations under delivery saturation. |
 | `health timing` | Accepted sample count, estimated capture intervals/coverage/rate, gaps and nonfinite rejections; FIFO sample/backlog/pending counts, discarded-record lower bound and nominal timestamp phase estimate. |
 | `health errors` | Bus/short-read and empty-FIFO/timeout counters, initialization/recovery/configuration faults, FIFO overflows/resets, timestamp adjustments/discontinuities and saturation; gyro calibration temperature delta and absence of accelerometer calibration. |
 | `health radio` | Current radio settings, outbound queue size, radio busy state, packet/airtime counters, last packet RSSI/SNR when available, noise-floor estimate, flood/direct counters. Local radio counters do not establish recipient delivery. |
@@ -270,7 +273,8 @@ expiry is a tested storage capability, not enabled target behavior. Inspect
 explicit response transmissions omitted when earlier pending responses occupy
 all available ownership, including early assistance requests. Local acknowledgement still stops
 SOS in that case; the counter does not imply transmission or reception. See the
-[recovery policy](fall_detection.md#post-fall-assessment-and-restart-recovery).
+[recovery policy](fall_detection.md#post-fall-assessment-and-restart-recovery)
+and [checked incident storage diagnostics](incident_storage.md).
 
 ## Sampling overhead and verification
 

@@ -40,6 +40,17 @@ boundaries when moving material between documents.
 
 ## Verification
 
+Release preparation uses the firmware version in
+[`MyMesh.h`](examples/companion_radio/MyMesh.h) and versioned notes under `docs`.
+The current candidate is [v1.1.0-beta](docs/release_notes_v1.1.0-beta.md).
+Keep upstream MeshCore version references separate from the SeniorHealthNode
+release identifier. Compare changes with the actual remote release tag and
+identify any additional uncommitted candidate changes.
+
+This checkout has no tracked GitHub Actions workflows, issue/PR templates or
+automated release configuration. Verification is local through `verify.ps1`
+and the additional capture checks below; it does not imply hosted CI success.
+
 Follow the [Windows setup](docs/build-validation.md#build-and-test-on-windows), then run
 `.\verify.ps1` for firmware changes. It builds the combined image and merged
 binary and runs both `native` and `native_delivery`. Add focused tests for changed
@@ -52,3 +63,6 @@ that prose, links or physical hardware are correct.
 In a pull request, state the problem, resulting behavior, checks actually run and
 any remaining validation limits. Builds and host tests do not establish real RF
 delivery, phone/BLE behavior, physical sensor timing or fall-detection accuracy.
+
+For capture/replay changes, also run the Python checks and regenerate the actual
+companion fixture using the [capture verification procedure](docs/build-validation.md#reproducible-verification).

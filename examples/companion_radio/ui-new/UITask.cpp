@@ -34,16 +34,14 @@
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];
+  char _version_info[20];
 
 public:
   SplashScreen(UITask* task) : _task(task) {
-    // strip off dash and commit hash by changing dash to null terminator
-    // e.g: v1.2.3-abcdef -> v1.2.3
+    // Preserve prerelease suffixes so the display identifies beta firmware.
     const char *ver = FIRMWARE_VERSION;
-    const char *dash = strchr(ver, '-');
 
-    int len = dash ? dash - ver : strlen(ver);
+    size_t len = strlen(ver);
     if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
     memcpy(_version_info, ver, len);
     _version_info[len] = 0;

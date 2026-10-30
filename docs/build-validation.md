@@ -66,7 +66,30 @@ Equivalent individual commands, from the project root:
 For the test commands, put the C++17 compiler's `bin` directory on `PATH` first;
 `verify.ps1` does this for its selected compiler automatically.
 
+Optional capture tooling has additional Python checks and a generated actual
+companion fixture. These are separate from `verify.ps1`:
+
+```powershell
+$env:HEALTH_CAPTURE_FIXTURE = Join-Path (Get-Location) '.pio\health_integration_capture.txt'
+.\.venv\Scripts\python.exe -m platformio test -e native -f test_health_integration
+.\.venv\Scripts\python.exe -m unittest discover -s tools -p "test_health*.py" -v
+.\.venv\Scripts\python.exe tools\health_replay.py .pio\health_integration_capture.txt --repeat 3
+```
+
+The fixture must be regenerated after maintained source/configuration changes.
+See [capture bundles](capture_bundles.md), [checked incident storage](incident_storage.md)
+and the [bench evidence template](fall_bench_template.md). Passing software checks
+does not establish physical acquisition, BLE/RF responsiveness, storage durability,
+recipient delivery or real-world detection performance.
+
 ## Build outputs
+
+The current candidate is `v1.1.0-beta`. The default `FIRMWARE_VERSION` in
+[`MyMesh.h`](../examples/companion_radio/MyMesh.h) supplies the companion
+device-info response and OLED splash label. The upstream MeshCore base remains
+1.17.0. Check local build overrides before identifying an image by release name.
+PlatformIO output filenames remain unversioned; retain the source snapshot and
+image hashes when exporting a candidate. See the [release notes](release_notes_v1.1.0-beta.md).
 
 PlatformIO uses `.pio/core`, `.pio/p` and `.pio/build`. Project-local board pins
 are under `boards/variants/heltec_v4`. Outputs under

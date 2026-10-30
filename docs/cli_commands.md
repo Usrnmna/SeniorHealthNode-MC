@@ -5,7 +5,9 @@ describes companion `get`/`set` settings, the `username`/`name` alias, supported
 upstream keys, and detailed `health`/`motion` statistics. Configuration setters
 share validation and persistence with the corresponding BLE protocol operations.
 Statistics use RAM aggregates. Separate bounded trace/event/evidence snapshots
-retain recent decisions; there is no continuous streaming or sample-rate flash logging.
+retain recent decisions without sample-rate flash logging. Optional
+[`motion record start|status|stop`](motion_recording.md) enables bounded USB
+session streaming; recording is disabled at startup.
 
 The local SeniorHealthNode BLE companion supports the fall-channel commands below
 through USB serial and the companion custom-variable protocol over BLE. Gyroscope

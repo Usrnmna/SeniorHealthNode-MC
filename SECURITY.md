@@ -12,8 +12,9 @@ health-monitoring and channel-setting code.
 The compiled fall destination is public `#falldetect`. Its hashtag-derived key
 is reproducible from the channel name and is not a private recipient secret.
 A private destination requires a shared key configured on sending and receiving
-nodes. Messages can contain the node name, assistance text and GPS coordinates
-or the configured fallback location.
+nodes. Fall notifications omit the node-name prefix but can contain assistance
+text and GPS coordinates or the configured fallback location. Ordinary companion
+messages and advertisements can still identify the node.
 
 Saved channel records contain the shared key without at-rest encryption. Firmware
 reads/replies omit the key and USB input has no firmware echo, but a client can
@@ -23,6 +24,12 @@ until a valid setting is saved; absent records use the compiled default. Local
 detection and SOS remain available when the channel is invalid.
 
 A matching repeater echo is not authenticated recipient or human acknowledgement.
+
+Unresolved incident records can also contain private destination information
+without at-rest encryption. Capture bundles exclude those records, but original
+mixed USB logs may include sensitive ordinary output. Review logs before sharing;
+bundle hashes establish local consistency, not authenticity. See
+[incident storage](docs/incident_storage.md) and [capture bundles](docs/capture_bundles.md).
 See [channel setup](docs/cli_commands.md#fall-message-channel-usb-and-ble) and
 [delivery evidence](docs/message_delivery_changes.md) for exact behavior.
 

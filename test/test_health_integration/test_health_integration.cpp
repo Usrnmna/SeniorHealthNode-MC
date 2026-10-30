@@ -4,20 +4,25 @@
 #define HEALTH_MONITOR_HOST_HEADER "../../test/health_integration_support/HostMesh.h"
 #include "../../examples/companion_radio/HealthMonitor.cpp"
 #include "../../examples/companion_radio/HealthRecording.cpp"
+#include "../../examples/companion_radio/HealthDiagnostics.cpp"
+#include "../../examples/companion_radio/CompanionCommandService.cpp"
+#include "../../examples/companion_radio/CompanionServices.h"
+#include "../../examples/companion_radio/CompanionStorageStartup.h"
 
 namespace {
 class CompanionHealth : public testing::Test {
 protected:
   MpuFifoFake hardware;
   MyMesh mesh;
+  virtual uint32_t initialMillis() const { return 0; }
 
   void SetUp() override {
-    g_mock_millis = 0; g_mock_button_level = HIGH;
+    g_mock_millis = initialMillis(); g_mock_button_level = HIGH;
     sensors = HostSensors{}; Serial = HostSerial{};
     resetHostUsb();
     host_pwm_attached = false; host_pwm_starts = 0;
     ASSERT_TRUE(alarm_buzzer.begin());
-    mesh.pollMotion(); g_mock_millis = 100; mesh.pollMotion();
+    mesh.pollMotion(); g_mock_millis += 100; mesh.pollMotion();
   }
   void sample(float acceleration = 1, float rotation = 0) {
     g_mock_millis += 20; hardware.push(acceleration, rotation); mesh.pollMotion();
@@ -642,6 +647,9 @@ TEST_F(CompanionHealth, CompleteProductionCaptureCanBeExportedForHostReplay) {
     ASSERT_TRUE(output.good());
   }
 }
+
+#include "service_cases.h"
+#include "storage_read_cases.h"
 }
 
 int main(int argc, char** argv) {

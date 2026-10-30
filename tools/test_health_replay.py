@@ -165,6 +165,80 @@ class IdentityTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_replay_rejects_source_mutation_before_decoded_publication(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "include").mkdir()
+            header = root / "include/config.h"
+            header.write_text("before")
+            capture, output = root / "capture.bin", root / "decoded.bin"
+            capture.write_bytes(b"capture")
+            with mock.patch.object(sys, "argv", ["health_replay.py", str(capture), "--project", str(root), "--decoded", str(output)]), \
+                    mock.patch.object(health_replay, "compiler_path", return_value="g++"), \
+                    mock.patch.object(health_replay, "decode_stream", side_effect=lambda src, dst: dst.write(b"validated")), \
+                    mock.patch.object(health_replay, "build_replayer", side_effect=lambda *args: header.write_text("changed")), \
+                    mock.patch.object(health_replay.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "verified\n", "")), \
+                    mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(1, health_replay.main())
+            self.assertFalse(output.exists())
+
+    def test_replay_rejects_capture_mutation_before_decoded_publication(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            capture, output = root / "capture.bin", root / "decoded.bin"
+            capture.write_bytes(b"capture")
+            with mock.patch.object(sys, "argv", ["health_replay.py", str(capture), "--decoded", str(output)]), \
+                    mock.patch.object(health_replay, "decode_stream", side_effect=lambda src, dst: dst.write(b"validated")), \
+                    mock.patch.object(health_replay, "build_replayer", side_effect=lambda *args: capture.write_bytes(b"changed capture")), \
+                    mock.patch.object(health_replay.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "verified\n", "")), \
+                    mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(1, health_replay.main())
+            self.assertFalse(output.exists())
+
+    def test_replay_rejects_host_tool_mutation_before_decoded_publication(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "tools").mkdir()
+            engine = root / "tools/health_replay_engine.h"
+            engine.write_text("original host replay input")
+            capture, output = root / "capture.bin", root / "decoded.bin"
+            capture.write_bytes(b"capture")
+            with mock.patch.object(sys, "argv", ["health_replay.py", str(capture), "--project", str(root), "--decoded", str(output)]), \
+                    mock.patch.object(health_replay, "compiler_path", return_value="g++"), \
+                    mock.patch.object(health_replay, "decode_stream", side_effect=lambda src, dst: dst.write(b"validated")), \
+                    mock.patch.object(health_replay, "build_replayer", side_effect=lambda *args: engine.write_text("changed host replay input")), \
+                    mock.patch.object(health_replay.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "verified\n", "")), \
+                    mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(1, health_replay.main())
+            self.assertFalse(output.exists())
+
+    def test_decoded_export_cannot_replace_other_existing_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            capture, output = Path(folder) / "capture.bin", Path(folder) / "other.bin"
+            capture.write_bytes(b"capture")
+            output.write_bytes(b"earlier evidence")
+            with mock.patch.object(sys, "argv", ["health_replay.py", str(capture), "--decoded", str(output)]), \
+                    mock.patch.object(health_replay, "decode_stream") as decode, \
+                    mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(1, health_replay.main())
+            decode.assert_not_called()
+            self.assertEqual(b"earlier evidence", output.read_bytes())
+            self.assertEqual(b"capture", capture.read_bytes())
+
+    def test_decoded_export_exclusive_creation_closes_check_write_race(self):
+        with tempfile.TemporaryDirectory() as folder:
+            capture, output = Path(folder) / "capture.bin", Path(folder) / "raced.bin"
+            capture.write_bytes(b"capture")
+            with mock.patch.object(sys, "argv", ["health_replay.py", str(capture), "--decoded", str(output)]), \
+                    mock.patch.object(health_replay, "source_manifest", return_value={"source_id": "a" * 64}), \
+                    mock.patch.object(health_replay, "decode_stream", side_effect=lambda src, dst: dst.write(b"validated")), \
+                    mock.patch.object(health_replay, "build_replayer", side_effect=lambda *args: output.write_bytes(b"concurrent evidence")), \
+                    mock.patch.object(health_replay.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "verified\n", "")), \
+                    mock.patch("sys.stderr", io.StringIO()):
+                self.assertEqual(1, health_replay.main())
+            self.assertEqual(b"concurrent evidence", output.read_bytes())
+            self.assertEqual(b"capture", capture.read_bytes())
+
     def test_decoded_export_cannot_replace_original_capture(self):
         with tempfile.TemporaryDirectory() as folder:
             capture = Path(folder) / "capture.bin"

@@ -211,17 +211,24 @@ recorded human activity dataset.
 
 ## Actual companion health methods and recording
 
-`test_health_integration` compiles production `HealthMonitor.cpp` and
-`HealthRecording.cpp` against a narrow host `MyMesh` shell. The methods own
+`test_health_integration` compiles production `HealthMonitor.cpp`,
+`HealthRecording.cpp`, `HealthDiagnostics.cpp` and `CompanionCommandService.cpp`
+against a narrow host `MyMesh` shell. The methods own
 orchestration; the shell supplies clock/GPIO, the production MPU6050 driver with
 a FIFO bus fake, storage latency/failure and transport enqueue boundaries.
-Coverage includes both simulated motion-service positions, I2C time advancement,
+The same `CompanionServices.h` function invoked from `main.cpp` owns both
+motion/response positions and alarm-owned UI button suppression. Coverage includes
+the actual bounded RX/parser/health dispatch and normal/rescue selector, I2C time advancement,
 calibration, persistence delays, original deadlines, gesture priority, repeated
 incidents, false-alarm cancellation, delivery callbacks and saturation, late
 stillness, recording backpressure and availability accounting.
+Negative USB availability/read results are injected at the actual command-service
+boundary to verify that partial commands survive without fabricated bytes.
 
 This differs from `test_fall_pipeline`, which remains a component pipeline.
-Neither executes the complete `main.cpp`/`MyMesh.cpp` scheduler, BLE stack or RTOS.
+Neither executes all of `main.cpp`/`MyMesh.cpp`, the BLE stack or RTOS. Rescue
+side effects, settings transactions, framed transport, peripherals, RTC tick and
+watchdog tail remain explicit host boundaries or separate component tests.
 The USB queue tests exercise production enqueue/delivery code with a manual
 worker; physical task scheduling, internal CDC locks and throughput remain
 unverified. [Recording checks](motion_recording.md) add portable checkpoints,
@@ -236,12 +243,27 @@ Durably completed resolutions do not revive older alarms in this model.
 Resets before a successful durable recovery-count update cannot consume a
 persisted recovery budget; unknown-clock policy is unchanged.
 
-The bundled Arduino filesystem exposes void `flush`/`close` and discards the
-underlying synchronization result. Tests explicitly demonstrate successful
-cached readback followed by rollback on reboot when flush fails silently.
-Firmware success therefore means **verified readback**, not verified physical
-durability. A lower-level failure-reporting storage boundary and controlled
-power-cut measurements remain necessary before claiming durable completion.
+The ESP32 incident writer now checks the available stdio/VFS write, flush and
+close results before readback. The pinned SPIFFS backend has no `fsync` callback.
+The ESP32 reader checks mount-qualified absence, open/stat/read/close results
+through the same owner used for recovery, pre-save inspection and verification.
+Unknown peer slots block recovery and writes; corrupt readable records retain
+their existing repair policy. The production startup helper records the existing
+`begin(true)` result and preserves store/mesh ordering. Its host tests do not
+execute the SDK's formatting implementation or the complete target startup.
+New tests execute this boundary with explicit error returns, including errors
+after data committed and a second-slot repair close failing after both records
+committed. Legacy Arduino-writer tests and a checked-API success
+model both demonstrate that successful cached readback can precede rollback on
+reboot. Success means **API success plus verified readback**, not verified physical
+durability. See [storage results and unchanged mount policy](incident_storage.md)
+and the [bench evidence template](fall_bench_template.md).
+
+Incident fault models in `native` use deterministic cryptography fakes. Literal
+public-active and private-tombstone record fixtures run separately in
+`native_delivery` with production `Utils` and real SHA-256; these establish
+format/checksum compatibility independently of the shared serializer. Neither
+suite executes the ESP32 VFS or establishes physical flash durability.
 
 ## What still needs physical testing
 

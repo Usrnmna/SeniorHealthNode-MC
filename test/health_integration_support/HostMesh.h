@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <new>
+#include <functional>
 #define ESP32
 #define ENV_INCLUDE_MPU6050 1
 #define ENV_PIN_SDA 4
@@ -39,6 +40,8 @@
 #include "../../examples/companion_radio/health/BoundedUsbOutput.h"
 #include "../../examples/companion_radio/health/FallInitialAlert.h"
 #include "../../examples/companion_radio/health/FallIncidentStore.h"
+#include "../../examples/companion_radio/health/IncidentWriteIO.h"
+#include "../../examples/companion_radio/health/IncidentReadIO.h"
 #include "../../examples/companion_radio/health/FallNoticeOutbox.h"
 
 inline bool host_pwm_attached = false;
@@ -54,6 +57,20 @@ struct HostSerial {
   unsigned writes = 0, write_calls = 0;
   mutable unsigned readiness_queries = 0;
   std::string bytes;
+  std::string input;
+  size_t read_at = 0;
+  unsigned reads = 0;
+  bool rx_ready = true, fail_next_read = false;
+  // HWCDC reports -1 before its RX queue exists; a failed queue receive also
+  // returns -1. These are stream status values, not received 0xff bytes.
+  int available() const { return rx_ready ? int(input.size() - read_at) : -1; }
+  int read() {
+    ++reads;
+    if (!rx_ready) return -1;
+    if (fail_next_read) { fail_next_read = false; return -1; }
+    return read_at < input.size() ? uint8_t(input[read_at++]) : -1;
+  }
+  void receive(const std::string& data) { input += data; }
   int availableForWrite() const { ++readiness_queries; return capacity; }
   size_t write(const uint8_t* data, size_t size) {
     ++write_calls;
@@ -75,10 +92,12 @@ struct HostUsbQueue {
   std::array<BoundedUsbPacket, 8> packets{};
   unsigned head = 0, tail = 0, used = 0;
   bool initialized = true;
+  unsigned reject_sends = 0;
   bool ready() const { return initialized; }
   unsigned spaces() const { return initialized ? unsigned(packets.size()) - used : 0; }
   unsigned count() const { return used; }
   bool trySend(const BoundedUsbPacket& packet) {
+    if (reject_sends) { --reject_sends; return false; }
     if (!spaces()) return false;
     packets[head] = packet; head = (head + 1) % packets.size(); ++used; return true;
   }
@@ -112,6 +131,10 @@ inline bool runHostUsbWorkerOnce() {
 struct HostFS {
   std::map<std::string, std::vector<uint8_t>> files;
   bool fail_open = false;
+  bool fail_flush = false, fail_close = false;
+  bool mounted = true, fail_read_stat = false, fail_read_data = false, fail_read_close = false;
+  int fail_read_slot = -1;
+  unsigned read_opens = 0, read_closes = 0;
   uint32_t write_delay_ms = 0;
   unsigned writes = 0;
   struct File {
@@ -137,6 +160,51 @@ struct HostFS {
     return {this, found == files.end() ? nullptr : &found->second};
   }
 };
+// Only native I/O outcomes are faked; the production checked reader owns all
+// sequencing, uncertainty and decoding. Write failures have separate controls.
+struct HostIncidentReadIO {
+  HostFS& fs;
+  bool mounted() const { return fs.mounted; }
+  int open(unsigned slot) {
+    ++fs.read_opens;
+    if (fs.fail_open || fs.fail_read_slot == int(slot)) { errno = EACCES; return -1; }
+    if (!fs.files.count(FallIncidentStore::path(slot))) { errno = ENOENT; return -1; }
+    return int(slot);
+  }
+  int size(int slot, size_t& length) {
+    if (fs.fail_read_stat) { errno = EIO; return -1; }
+    length = fs.files.at(FallIncidentStore::path(slot)).size(); return 0;
+  }
+  int read(int slot, uint8_t* bytes, size_t length) {
+    if (fs.fail_read_data) { errno = EIO; return -1; }
+    const auto& source = fs.files.at(FallIncidentStore::path(slot));
+    length = std::min(length, source.size());
+    if (length) memcpy(bytes, source.data(), length);
+    return int(length);
+  }
+  int close(int) {
+    ++fs.read_closes;
+    if (fs.fail_read_close) { errno = EIO; return -1; }
+    return 0;
+  }
+};
+// The production checked writer and slot policy run against immediate host
+// storage. A failed flush/close can follow committed bytes in this model; no
+// assertion treats this as a simulation of physical power-cut durability.
+struct HostIncidentIO {
+  HostFS& fs;
+  HostFS::File open(unsigned slot) { return fs.open(FallIncidentStore::path(slot), "w"); }
+  size_t write(HostFS::File& file, const uint8_t* bytes, size_t length) { return file.write(bytes, length); }
+  int flush(HostFS::File&) { if (fs.fail_flush) { errno = EIO; return -1; } return 0; }
+  int close(HostFS::File&) { if (fs.fail_close) { errno = EIO; return -1; } return 0; }
+};
+inline FallIncidentStore::SaveResult saveHealthIncident(HostFS& fs, const FallIncidentStore::Incident& value) {
+  HostIncidentIO io{fs};
+  FallIncidentStore::CheckedIncidentWriter<HostIncidentIO> writer(io);
+  HostIncidentReadIO read_io{fs};
+  FallIncidentStore::CheckedIncidentReader<HostIncidentReadIO> reader(read_io);
+  return FallIncidentStore::saveWithReader(reader, value, writer);
+}
 struct HostStore { HostFS fs; HostFS* getPrimaryFS() { return &fs; } };
 struct HostClock {
   uint32_t timestamp = 1800000000;
@@ -169,7 +237,24 @@ struct HostBoard {
   float getAdcMultiplier() const { return 4.9f; }
 };
 inline HostBoard board;
-struct NodePrefs { float adc_multiplier = 0; };
+// Status-only peripheral boundaries for the production diagnostics formatter.
+struct NodePrefs {
+  float adc_multiplier = 0, freq = 869.618f, bw = 62.5f;
+  uint8_t sf = 8, cr = 5;
+  int8_t tx_power_dbm = 14;
+  bool isRepeatEn() const { return false; }
+};
+struct HostRadio {
+  bool configurationBusy() const { return false; }
+  unsigned getPacketsSent() const { return 0; }
+  unsigned getPacketsRecv() const { return 0; }
+  unsigned getPacketsRecvErrors() const { return 0; }
+  float getLastRSSI() const { return 0; }
+  float getLastSNR() const { return 0; }
+  int getNoiseFloor() const { return 0; }
+};
+inline HostRadio radio_driver;
+struct HostPacketManager { unsigned getOutboundTotal() const { return 0; } };
 
 class MyMesh : public AssistanceTransport {
 public:
@@ -178,6 +263,10 @@ public:
   FallInitialAlert initial_alert;
   FallIncidentStore::Incident durable_incident;
   FallIncidentStore::Outcome recovery_outcome = FallIncidentStore::Missing;
+  FallIncidentStore::SaveResult persistence_result;
+  FallIncidentStore::ReadResult recovery_reads[2];
+  bool storage_startup_attempted = false, storage_startup_ok = false;
+  void setStorageStartupResult(bool ok) { storage_startup_attempted = true; storage_startup_ok = ok; }
   uint32_t persistence_retry_at = 0;
   bool persistence_dirty = false, persistence_fault = false, persistence_attempted = false;
   FallResponse fall_response;
@@ -187,7 +276,14 @@ public:
   FallNoticeOutbox fall_notices;
   MotionHealth motion_health{FallDetectionConfig{}.max_sample_gap_ms, HealthNodeConfig::motion_fault_timeout_ms};
   MotionStatistics motion_statistics;
+  MotionStatistics motion_stats_reply;
   MotionTrace motion_trace;
+  MotionTrace::Sample trace_reply[MotionTrace::capacity];
+  MotionTrace::Event event_reply[MotionTrace::event_capacity];
+  unsigned trace_reply_count = 0, trace_reply_row = 0;
+  bool trace_reply_events = false;
+  int8_t motion_stats_row = -1;
+  bool motion_stats_raw = false;
   uint32_t motion_generation = 0;
   DetectorAvailability detector_availability;
   MotionServiceTiming motion_timing;
@@ -204,6 +300,31 @@ public:
   GyroCalibration::State calibration_reported_state = GyroCalibration::Idle;
   AssistanceDelivery::State reported_help = AssistanceDelivery::Idle, reported_fall = AssistanceDelivery::Idle;
   UsbReply usb_reply;
+  char cli_command[160] = {};
+  bool cli_overflow = false, _cli_rescue = false;
+  unsigned protocol_services = 0;
+  std::vector<std::string> rescue_commands, settings_commands;
+  HostPacketManager manager;
+  HostPacketManager* _mgr = &manager;
+  // Radio-frame parsing, settings transactions and rescue filesystem/reboot
+  // operations are explicit boundaries. RX, health/diagnostic dispatch and the
+  // normal/rescue selector are the production implementations below.
+  void checkSerialInterface() { ++protocol_services; }
+  void executeRescueCommand() { rescue_commands.emplace_back(cli_command); }
+  bool handleSettingsCommand(const char* command, char* reply) {
+    settings_commands.emplace_back(command);
+    if (strcmp(command, "host settings")) return false;
+    strcpy(reply, "host settings boundary"); return true;
+  }
+  void serviceCompanionCommands();
+  void checkCLIRescueCmd(bool health_only = false);
+  void loop() { serviceCompanionCommands(); }
+  unsigned long getTotalAirTime() const { return 0; }
+  unsigned long getReceiveAirTime() const { return 0; }
+  unsigned getNumSentFlood() const { return 0; }
+  unsigned getNumSentDirect() const { return 0; }
+  unsigned getNumRecvFlood() const { return 0; }
+  unsigned getNumRecvDirect() const { return 0; }
   HostStore store;
   HostStore* _store = &store;
   HostClock clock;
@@ -231,6 +352,7 @@ public:
   void pollFallResponse();
   void pollLowBattery();
   void restoreFallIncident();
+  int incidentStorageMounted() const;
   void pollIncidentPersistence(uint32_t);
   void recordIncident(bool);
   void onPacketTxComplete(uint32_t, bool);
@@ -247,6 +369,9 @@ public:
   const char* motionAvailability(uint32_t) const;
   void observeDetectorAvailability(uint32_t);
   bool handleHealthCommand(const char*, char*);
+  bool handleDiagnosticCommand(const char*);
+  void continueMotionStatsReply();
+  void continueMotionTraceReply();
   bool calibrationIncidentBusy() const;
   uint8_t controlCalibration(const char*, char*);
   uint8_t setFallChannel(const char*);

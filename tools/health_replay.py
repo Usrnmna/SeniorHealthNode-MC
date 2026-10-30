@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import hashlib
 import io
 import os
 from pathlib import Path
@@ -26,6 +27,31 @@ STREAM_CHUNK_SIZE = 64 * 1024
 
 class CaptureError(ValueError):
     pass
+
+
+def file_identity(path: Path) -> tuple[int, str]:
+    """Fingerprint a bounded stream without retaining capture contents."""
+    digest, size = hashlib.sha256(), 0
+    with path.open("rb") as source:
+        while chunk := source.read(STREAM_CHUNK_SIZE):
+            digest.update(chunk)
+            size += len(chunk)
+    return size, digest.hexdigest()
+
+
+def replay_inputs(project: Path) -> dict:
+    """Identify maintained firmware and host replay inputs around an execution.
+
+    Host headers and replay sources are outside the firmware source-ID scope.
+    Compiler packages and installed firmware remain separate evidence.
+    """
+    paths = {Path(__file__).resolve(), Path(__file__).with_name("health_identity.py").resolve(),
+             project / "tools/health_replay.cpp", project / "tools/health_replay_engine.h"}
+    mocks = project / "test/mocks"
+    if mocks.is_dir():
+        paths.update(path for path in mocks.rglob("*") if path.is_file() and path.suffix in (".h", ".hpp"))
+    return {"source": source_manifest(project),
+            "tools": {str(path): file_identity(path) if path.is_file() else None for path in paths}}
 
 
 def decode_stream(source, destination, chunk_size: int = STREAM_CHUNK_SIZE) -> None:
@@ -172,8 +198,14 @@ def main() -> int:
         if args.decoded and (args.decoded.resolve() == args.recording.resolve() or
                              (args.decoded.exists() and args.decoded.samefile(args.recording))):
             raise CaptureError("--decoded must not replace the original recording")
+        if args.decoded and args.decoded.exists():
+            raise CaptureError("--decoded destination already exists; existing evidence is retained")
         project = args.project.resolve()
-        source = source_manifest(project)["source_id"]
+        if not args.recording.is_file():
+            raise CaptureError("recording must be a regular file")
+        original_capture = file_identity(args.recording)
+        original_inputs = replay_inputs(project)
+        source = original_inputs["source"]["source_id"]
         with tempfile.TemporaryDirectory(prefix="shn-replay-") as directory:
             folder = Path(directory)
             decoded = folder / "decoded.bin"
@@ -191,8 +223,14 @@ def main() -> int:
                 outputs.append(result.stdout)
             if len(set(outputs)) != 1:
                 raise CaptureError("repeat runs produced different outcomes")
+            if original_capture != file_identity(args.recording):
+                raise CaptureError("recording changed during replay; decoded output was not published")
+            if original_inputs != replay_inputs(project):
+                raise CaptureError("source or host replay inputs changed during replay; decoded output was not published")
             if args.decoded:
-                with decoded.open("rb") as validated, args.decoded.open("wb") as destination:
+                # Exclusive creation also protects evidence created after the
+                # initial check while compilation/replay was in progress.
+                with decoded.open("rb") as validated, args.decoded.open("xb") as destination:
                     shutil.copyfileobj(validated, destination, STREAM_CHUNK_SIZE)
             print(outputs[0].strip())
             print(f"Determinism: {args.repeat} identical run(s). Source identity: {source}")

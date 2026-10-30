@@ -2098,215 +2098,158 @@ void MyMesh::replySettingsResult(NodePrefs& candidate) {
   else writeErrFrame(result == 1 ? ERR_CODE_ILLEGAL_ARG : result == 2 ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_BAD_STATE);
 }
 
-void MyMesh::checkCLIRescueCmd(bool health_only) {
-#if ENV_INCLUDE_MPU6050
-  // Reply/control traffic has priority over recording. RX keeps progressing even
-  // when TX stalls, so a stop command cannot be trapped behind its start reply.
-  usb_reply.drain(bounded_usb_output);
-  serviceMotionRecording();
-  if (!usb_reply.pending()) {
-    if (motion_stats_row >= 0) continueMotionStatsReply();
-    else if (trace_reply_row < trace_reply_count) continueMotionTraceReply();
-  }
-#else
-  if (usb_reply.pending()) { usb_reply.drain(Serial); return; }
-#endif
-  int len = strlen(cli_command);
-  unsigned serial_bytes = 0;
-#if ENV_INCLUDE_MPU6050
-  const unsigned serial_budget = HealthNodeConfig::serial_rx_bytes_per_loop;
-#else
-  const unsigned serial_budget = 16;
-#endif
-  // Keep parsing bounded per loop. Discard the whole line after overflow;
-  // never execute a truncated key or interpret its tail as another command.
-  while (Serial.available() && serial_bytes++ < serial_budget) {
-    const char c = Serial.read();
-    if (c == '\n' && len == 0 && !cli_overflow) continue; // CRLF's trailing LF.
-    if (c == '\r' || c == '\n') {
-      if (cli_overflow) {
-        usb_reply.append("Error: command too long or contains invalid bytes\n");
-        cli_command[0] = 0; cli_overflow = false;
-        return;
-      }
-      cli_command[len++] = '\r'; cli_command[len] = 0;
-      break;
-    }
-    if (cli_overflow) continue;
-    if (c == 0 || len >= sizeof(cli_command) - 2) { cli_overflow = true; continue; }
-    cli_command[len++] = c; cli_command[len] = 0;
-    // No local echo: a private key must not be copied into USB diagnostics.
-  }
-
-  if (len > 0 && cli_command[len - 1] == '\r') {  // received complete line
-    cli_command[len - 1] = 0;  // replace newline with C string null terminator
-
-    char reply[160] = {};
-#if ENV_INCLUDE_MPU6050
-    if (handleRecordingCommand(cli_command) || handleDiagnosticCommand(cli_command)) {
-      // Diagnostic replies drain incrementally on subsequent loop iterations.
-    } else
-#endif
-    if (health_only && handleSettingsCommand(cli_command, reply)) {
-      if (*reply) usb_reply.append("%s\n", reply);
-#if ENV_INCLUDE_MPU6050
-    } else if (handleHealthCommand(cli_command, reply)) {
-      usb_reply.append("%s\n", reply);
-#endif
-    } else if (health_only) {
-      usb_reply.append("Error: unknown command; use help\n");
-    } else if (memcmp(cli_command, "set ", 4) == 0) {
-      const char* config = &cli_command[4];
-      if (memcmp(config, "pin ", 4) == 0) {
-        _prefs.ble_pin = atoi(&config[4]);
-        savePrefs();
-        Serial.printf("  > pin is now %06d\n", _prefs.ble_pin);
-      } else {
-        Serial.println("  Error: unknown config"); // Never echo a mistyped private-key command.
-      }
-    } else if (strcmp(cli_command, "rebuild") == 0) {
-      bool success = _store->formatFileSystem();
-      if (success) {
-        _store->saveMainIdentity(self_id);
-        savePrefs();
-        saveContacts();
-        saveChannels();
-        Serial.println("  > erase and rebuild done");
-      } else {
-        Serial.println("  Error: erase failed");
-      }
-    } else if (strcmp(cli_command, "erase") == 0) {
-      bool success = _store->formatFileSystem();
-      if (success) {
-        Serial.println("  > erase done");
-      } else {
-        Serial.println("  Error: erase failed");
-      }
-    } else if (memcmp(cli_command, "ls", 2) == 0) {
-
-      // get path from command e.g: "ls /adafruit"
-      const char *path = &cli_command[3];
-
-      bool is_fs2 = false;
-      if (memcmp(path, "UserData/", 9) == 0) {
-        path += 8; // skip "UserData"
-      } else if (memcmp(path, "ExtraFS/", 8) == 0) {
-        path += 7; // skip "ExtraFS"
-        is_fs2 = true;
-      }
-      Serial.printf("Listing files in %s\n", path);
-
-      // log each file and directory
-      File root = _store->openRead(path);
-      if (is_fs2 == false) {
-        if (root) {
-          File file = root.openNextFile();
-          while (file) {
-            if (file.isDirectory()) {
-              Serial.printf("[dir]  UserData%s/%s\n", path, file.name());
-            } else {
-              Serial.printf("[file] UserData%s/%s (%d bytes)\n", path, file.name(), file.size());
-            }
-            // move to next file
-            file = root.openNextFile();
-          }
-          root.close();
-        }
-      }
-
-      if (is_fs2 == true || strlen(path) == 0 || strcmp(path, "/") == 0) {
-        if (_store->getSecondaryFS() != nullptr) {
-          File root2 = _store->openRead(_store->getSecondaryFS(), path);
-          File file = root2.openNextFile();
-          while (file) {
-            if (file.isDirectory()) {
-              Serial.printf("[dir]  ExtraFS%s/%s\n", path, file.name());
-            } else {
-              Serial.printf("[file] ExtraFS%s/%s (%d bytes)\n", path, file.name(), file.size());
-            }
-            // move to next file
-            file = root2.openNextFile();
-          }
-          root2.close();
-        }
-      }
-    } else if (memcmp(cli_command, "cat", 3) == 0) {
-
-      // get path from command e.g: "cat /contacts3"
-      const char *path = &cli_command[4];
-
-      bool is_fs2 = false;
-      if (memcmp(path, "UserData/", 9) == 0) {
-        path += 8; // skip "UserData"
-      } else if (memcmp(path, "ExtraFS/", 8) == 0) {
-        path += 7; // skip "ExtraFS"
-        is_fs2 = true;
-      } else {
-        Serial.println("Invalid path provided, must start with UserData/ or ExtraFS/");
-        cli_command[0] = 0;
-        return;
-      }
-
-      // log file content as hex
-      File file = _store->openRead(path);
-      if (is_fs2 == true) {
-        file = _store->openRead(_store->getSecondaryFS(), path);
-      }
-      if(file){
-
-        // get file content
-        int file_size = file.available();
-        uint8_t buffer[file_size];
-        file.read(buffer, file_size);
-
-        // print hex
-        mesh::Utils::printHex(Serial, buffer, file_size);
-        Serial.print("\n");
-
-        file.close();
-
-      }
-
-    } else if (memcmp(cli_command, "rm ", 3) == 0) {
-      // get path from command e.g: "rm /adv_blobs"
-      const char *path = &cli_command[3];
-      MESH_DEBUG_PRINTLN("Removing file: %s", path);
-      // ensure path is not empty, or root dir
-      if(!path || strlen(path) == 0 || strcmp(path, "/") == 0){
-        Serial.println("Invalid path provided");
-      } else {
-      bool is_fs2 = false;
-      if (memcmp(path, "UserData/", 9) == 0) {
-        path += 8; // skip "UserData"
-      } else if (memcmp(path, "ExtraFS/", 8) == 0) {
-        path += 7; // skip "ExtraFS"
-        is_fs2 = true;
-      }
-
-        // remove file
-        bool removed;
-        if (is_fs2) {
-          MESH_DEBUG_PRINTLN("Removing file from ExtraFS: %s", path);
-          removed = _store->removeFile(_store->getSecondaryFS(), path);
-        } else {
-          MESH_DEBUG_PRINTLN("Removing file from UserData: %s", path);
-          removed = _store->removeFile(path);
-        }
-        if(removed){
-          Serial.println("File removed");
-        } else {
-          Serial.println("Failed to remove file");
-        }
-
-      }
-
-    } else if (strcmp(cli_command, "reboot") == 0) {
-      board.reboot();  // doesn't return
+// Rescue operations retain their filesystem/reboot side effects and may block.
+// Normal health-command dispatch never enters this boundary.
+void MyMesh::executeRescueCommand() {
+  if (memcmp(cli_command, "set ", 4) == 0) {
+    const char* config = &cli_command[4];
+    if (memcmp(config, "pin ", 4) == 0) {
+      _prefs.ble_pin = atoi(&config[4]);
+      savePrefs();
+      Serial.printf("  > pin is now %06d\n", _prefs.ble_pin);
     } else {
-      Serial.println("  Error: unknown command");
+      Serial.println("  Error: unknown config"); // Never echo a mistyped private-key command.
+    }
+  } else if (strcmp(cli_command, "rebuild") == 0) {
+    bool success = _store->formatFileSystem();
+    if (success) {
+      _store->saveMainIdentity(self_id);
+      savePrefs();
+      saveContacts();
+      saveChannels();
+      Serial.println("  > erase and rebuild done");
+    } else {
+      Serial.println("  Error: erase failed");
+    }
+  } else if (strcmp(cli_command, "erase") == 0) {
+    bool success = _store->formatFileSystem();
+    if (success) {
+      Serial.println("  > erase done");
+    } else {
+      Serial.println("  Error: erase failed");
+    }
+  } else if (memcmp(cli_command, "ls", 2) == 0) {
+
+    // get path from command e.g: "ls /adafruit"
+    const char *path = &cli_command[3];
+
+    bool is_fs2 = false;
+    if (memcmp(path, "UserData/", 9) == 0) {
+      path += 8; // skip "UserData"
+    } else if (memcmp(path, "ExtraFS/", 8) == 0) {
+      path += 7; // skip "ExtraFS"
+      is_fs2 = true;
+    }
+    Serial.printf("Listing files in %s\n", path);
+
+    // log each file and directory
+    File root = _store->openRead(path);
+    if (is_fs2 == false) {
+      if (root) {
+        File file = root.openNextFile();
+        while (file) {
+          if (file.isDirectory()) {
+            Serial.printf("[dir]  UserData%s/%s\n", path, file.name());
+          } else {
+            Serial.printf("[file] UserData%s/%s (%d bytes)\n", path, file.name(), file.size());
+          }
+          // move to next file
+          file = root.openNextFile();
+        }
+        root.close();
+      }
     }
 
-    cli_command[0] = 0;  // reset command buffer
+    if (is_fs2 == true || strlen(path) == 0 || strcmp(path, "/") == 0) {
+      if (_store->getSecondaryFS() != nullptr) {
+        File root2 = _store->openRead(_store->getSecondaryFS(), path);
+        File file = root2.openNextFile();
+        while (file) {
+          if (file.isDirectory()) {
+            Serial.printf("[dir]  ExtraFS%s/%s\n", path, file.name());
+          } else {
+            Serial.printf("[file] ExtraFS%s/%s (%d bytes)\n", path, file.name(), file.size());
+          }
+          // move to next file
+          file = root2.openNextFile();
+        }
+        root2.close();
+      }
+    }
+  } else if (memcmp(cli_command, "cat", 3) == 0) {
+
+    // get path from command e.g: "cat /contacts3"
+    const char *path = &cli_command[4];
+
+    bool is_fs2 = false;
+    if (memcmp(path, "UserData/", 9) == 0) {
+      path += 8; // skip "UserData"
+    } else if (memcmp(path, "ExtraFS/", 8) == 0) {
+      path += 7; // skip "ExtraFS"
+      is_fs2 = true;
+    } else {
+      Serial.println("Invalid path provided, must start with UserData/ or ExtraFS/");
+      cli_command[0] = 0;
+      return;
+    }
+
+    // log file content as hex
+    File file = _store->openRead(path);
+    if (is_fs2 == true) {
+      file = _store->openRead(_store->getSecondaryFS(), path);
+    }
+    if(file){
+
+      // get file content
+      int file_size = file.available();
+      uint8_t buffer[file_size];
+      file.read(buffer, file_size);
+
+      // print hex
+      mesh::Utils::printHex(Serial, buffer, file_size);
+      Serial.print("\n");
+
+      file.close();
+
+    }
+
+  } else if (memcmp(cli_command, "rm ", 3) == 0) {
+    // get path from command e.g: "rm /adv_blobs"
+    const char *path = &cli_command[3];
+    MESH_DEBUG_PRINTLN("Removing file: %s", path);
+    // ensure path is not empty, or root dir
+    if(!path || strlen(path) == 0 || strcmp(path, "/") == 0){
+      Serial.println("Invalid path provided");
+    } else {
+    bool is_fs2 = false;
+    if (memcmp(path, "UserData/", 9) == 0) {
+      path += 8; // skip "UserData"
+    } else if (memcmp(path, "ExtraFS/", 8) == 0) {
+      path += 7; // skip "ExtraFS"
+      is_fs2 = true;
+    }
+
+      // remove file
+      bool removed;
+      if (is_fs2) {
+        MESH_DEBUG_PRINTLN("Removing file from ExtraFS: %s", path);
+        removed = _store->removeFile(_store->getSecondaryFS(), path);
+      } else {
+        MESH_DEBUG_PRINTLN("Removing file from UserData: %s", path);
+        removed = _store->removeFile(path);
+      }
+      if(removed){
+        Serial.println("File removed");
+      } else {
+        Serial.println("Failed to remove file");
+      }
+
+    }
+
+  } else if (strcmp(cli_command, "reboot") == 0) {
+    board.reboot();  // doesn't return
+  } else {
+    Serial.println("  Error: unknown command");
   }
 }
 
@@ -2340,14 +2283,7 @@ void MyMesh::checkSerialInterface() {
 void MyMesh::loop() {
   BaseChatMesh::loop();
 
-  if (_cli_rescue) {
-    checkCLIRescueCmd();
-  } else {
-    checkSerialInterface();
-#if ENV_INCLUDE_MPU6050 && !defined(ENABLE_USB_INTERFACE)
-    checkCLIRescueCmd(true); // USB serial diagnostics coexist with the BLE protocol.
-#endif
-  }
+  serviceCompanionCommands();
 
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {

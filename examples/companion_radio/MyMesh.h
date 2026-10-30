@@ -12,7 +12,7 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "v1.17.0"
+#define FIRMWARE_VERSION "v1.1.0-beta"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -109,11 +109,14 @@ class MyMesh : public BaseChatMesh, public DataStoreHost
   , public AssistanceTransport
 #endif
 {
+  bool storage_startup_attempted = false, storage_startup_ok = false;
 #if ENV_INCLUDE_MPU6050
   MotionRule motion_rule;
   FallInitialAlert initial_alert;
   FallIncidentStore::Incident durable_incident;
   FallIncidentStore::Outcome recovery_outcome = FallIncidentStore::Missing;
+  FallIncidentStore::SaveResult persistence_result;
+  FallIncidentStore::ReadResult recovery_reads[2];
   uint32_t persistence_retry_at = 0;
   bool persistence_dirty = false, persistence_fault = false, persistence_attempted = false;
   void pollIncidentPersistence(uint32_t now);
@@ -179,12 +182,14 @@ public:
   void pollFallResponse();
   void pollLowBattery();
   void restoreFallIncident();
+  int incidentStorageMounted() const; // -1 means mount state is not observed.
   bool fallAlarmActive() const { return fall_response.alarmActive(); }
 #endif
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
 
   void begin(bool has_display);
+  void setStorageStartupResult(bool ok) { storage_startup_attempted = true; storage_startup_ok = ok; }
   void startInterface(BaseSerialInterface &serial);
 
   const char *getNodeName();
@@ -302,7 +307,9 @@ private:
     return _store->putBlobByKey(key, key_len, src_buf, len);
   }
 
+  void serviceCompanionCommands();
   void checkCLIRescueCmd(bool health_only = false);
+  void executeRescueCommand();
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
 
